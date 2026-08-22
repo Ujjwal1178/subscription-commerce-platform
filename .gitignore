@@ -1,0 +1,149 @@
+# ================================
+# SUBSCRIPTION COMMERCE PLATFORM
+# .gitignore
+# ================================
+
+# ================================
+# PYTHON
+# ================================
+# Byte-compiled / optimized / DLL files
+# Jab Python code run hota hai, interpreter .py files ko compile karke
+# bytecode (.pyc) banata hai for faster execution next time
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions (compiled from Cython or C)
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+
+# Virtual Environment
+# Ye folder mein sab installed packages hoti hain
+# Har developer khud create karta hai: python -m venv venv
+# Isliye git mein daalne ki zaroorat nahi
+venv/
+env/
+ENV/
+.venv/
+
+# ================================
+# ENVIRONMENT & SECRETS (CRITICAL!)
+# ================================
+# KABHI COMMIT MAT KARNA! Ismein sensitive data hota hai:
+# - Database passwords
+# - API keys (AWS, Stripe, etc.)
+# - JWT secrets
+# - Third party credentials
+# Agar galti se commit ho gaya, consider those secrets COMPROMISED
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ================================
+# IDE / EDITOR
+# ================================
+# Har developer ke IDE settings alag hote hain
+# Ye personal preferences hain, share karne ki zaroorat nahi
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ================================
+# TESTING & COVERAGE
+# ================================
+# Test results aur coverage reports - ye CI/CD mein generate hote hain
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ================================
+# DOCKER
+# ================================
+# Local docker overrides - production config se alag hoti hain
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ================================
+# LOGS
+# ================================
+# Log files bahut bade ho sakte hain aur sensitive info contain kar sakte hain
+*.log
+logs/
+log/
+
+# ================================
+# DATABASE (LOCAL)
+# ================================
+# Local development databases - production mein PostgreSQL use hoga
+*.db
+*.sqlite3
+*.sqlite
+
+# ================================
+# OS GENERATED
+# ================================
+# Operating system generated files - useless for others
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ================================
+# MISC
+# ================================
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Local data folders (for testing)
+data/
+tmp/
+temp/
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# mypy type checker cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Profiling data
+*.prof
