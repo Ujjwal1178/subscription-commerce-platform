@@ -1,0 +1,14 @@
+# ========================================
+# PAYMENT SCHEDULER DEPENDENCIES
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# Redis (for distributed locks - prevent duplicate job processing)
+redis==5.0.1
+
+# Retry logic
+tenacity==8.2.3
+
+# Note: This worker calls Payment Service API, doesn't need Stripe directly

@@ -5,7 +5,7 @@
 Before starting, ensure you have installed:
 
 - [ ] Python 3.11+
-- [ ] Docker Desktop
+- [ ] Docker Desktop (running)
 - [ ] Git
 - [ ] VS Code (recommended) or any IDE
 
@@ -13,33 +13,54 @@ Before starting, ensure you have installed:
 
 ## Quick Start
 
+### Step 1: Clone the repository
 ```bash
-# 1. Clone the repository
 git clone git@github.com-personal:Ujjwal1178/subscription-commerce-platform.git
 cd subscription-commerce-platform
+```
 
-# 2. Start infrastructure (Postgres, Redis, Kafka)
+### Step 2: Start Infrastructure (Docker)
+```bash
+# Start all containers (Postgres, Redis, Kafka, Zookeeper)
 docker-compose up -d
 
-# 3. Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or
-.\venv\Scripts\activate  # Windows
+# Check if all containers are running
+docker-compose ps
 
-# 4. Install dependencies
-pip install -r requirements.txt
-
-# 5. Run migrations
-alembic upgrade head
-
-# 6. Start services
-# (Each service in separate terminal)
-uvicorn services.api_gateway.main:app --port 8000 --reload
-uvicorn services.auth_service.main:app --port 8001 --reload
-uvicorn services.user_subscription_service.main:app --port 8002 --reload
-uvicorn services.payment_service.main:app --port 8003 --reload
+# View logs (if something fails)
+docker-compose logs -f postgres
+docker-compose logs -f kafka
 ```
+
+### Step 3: Verify Databases Created
+```bash
+# Connect to PostgreSQL
+docker exec -it scp_postgres psql -U postgres
+
+# List databases (should see auth_db, user_subs_db, payment_db, notification_db)
+\l
+
+# Exit
+\q
+```
+
+### Step 4: Verify Redis
+```bash
+# Connect to Redis
+docker exec -it scp_redis redis-cli
+
+# Test
+PING
+# Should return: PONG
+
+# Exit
+exit
+```
+
+### Step 5: Kafka UI
+Open browser: http://localhost:8080
+- See topics, messages, consumers
+- Great for debugging async communication
 
 ---
 

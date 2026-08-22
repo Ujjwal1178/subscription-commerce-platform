@@ -1,0 +1,15 @@
+# ========================================
+# NOTIFICATION SERVICE DEPENDENCIES
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# Kafka (consume events)
+aiokafka==0.10.0
+
+# Email
+aiosmtplib==3.0.1
+
+# SMS (Twilio - future)
+# twilio==8.10.0

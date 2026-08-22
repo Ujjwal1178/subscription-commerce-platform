@@ -1,0 +1,10 @@
+# ========================================
+# NOTIFICATION SERVICE DEPENDENCIES
+# APIs: GET notifications, mark as read
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# Redis (for caching notifications)
+redis==5.0.1

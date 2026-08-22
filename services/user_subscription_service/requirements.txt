@@ -1,0 +1,12 @@
+# ========================================
+# USER SUBSCRIPTION SERVICE DEPENDENCIES
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# Redis (for caching user profiles, subscription plans)
+redis==5.0.1
+
+# Kafka (for publishing subscription events)
+aiokafka==0.10.0

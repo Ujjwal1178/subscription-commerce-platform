@@ -1,0 +1,23 @@
+# ========================================
+# DEVELOPMENT DEPENDENCIES
+# Install on local machine, not in production containers
+# ========================================
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+
+# Code Quality
+black==24.1.1            # Code formatter
+isort==5.13.2            # Import sorter
+mypy==1.8.0              # Type checking
+flake8==7.0.0            # Linting
+
+# Development utilities
+pre-commit==3.6.0        # Git hooks
+ipython==8.20.0          # Better Python shell
+
+# Documentation
+mkdocs==1.5.3            # Doc generator
+mkdocs-material==9.5.3   # Nice theme

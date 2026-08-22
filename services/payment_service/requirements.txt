@@ -1,0 +1,15 @@
+# ========================================
+# PAYMENT SERVICE DEPENDENCIES
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# Payment Gateway
+stripe==7.10.0
+
+# Redis (for idempotency keys, distributed locks)
+redis==5.0.1
+
+# Retry logic (for payment retries)
+tenacity==8.2.3

@@ -1,0 +1,12 @@
+# ========================================
+# API GATEWAY DEPENDENCIES
+# ========================================
+
+# Include shared dependencies
+-r ../../shared/requirements.txt
+
+# JWT verification (verify tokens, don't create)
+python-jose[cryptography]==3.3.0
+
+# Redis (for rate limiting)
+redis==5.0.1

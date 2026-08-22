@@ -1,0 +1,204 @@
+# ============================================================================
+# SUBSCRIPTION COMMERCE PLATFORM
+# Docker Compose for Local Development
+# ============================================================================
+# Usage:
+#   Start all:    docker-compose up -d
+#   Stop all:     docker-compose down
+#   View logs:    docker-compose logs -f [service_name]
+#   Reset data:   docker-compose down -v  (CAUTION: deletes volumes!)
+# ============================================================================
+
+version: '3.8'
+
+# ============================================================================
+# SERVICES
+# ============================================================================
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL Database
+  # --------------------------------------------------------------------------
+  # Why Postgres? ACID compliance, great for transactions (payments!)
+  # We'll create multiple databases inside one instance (dev convenience)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine    # Alpine = smaller image size
+    container_name: scp_postgres
+    restart: unless-stopped      # Auto-restart if crashes
+    
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres      # Default DB (we'll create more via init script)
+    
+    ports:
+      - "5432:5432"              # host:container - access from localhost:5432
+    
+    volumes:
+      # Data persistence - IMPORTANT!
+      # Without this, data gone when container deleted
+      - postgres_data:/var/lib/postgresql/data
+      
+      # Init script - creates our databases on first run
+      # .sh files are executed by postgres entrypoint
+      - ./infrastructure/docker/postgres-init.sh:/docker-entrypoint-initdb.d/init.sh
+    
+    # Health check - other services wait for postgres to be ready
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Redis Cache
+  # --------------------------------------------------------------------------
+  # Used for: Caching, Rate Limiting, Distributed Locks, Session Storage
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: scp_redis
+    restart: unless-stopped
+    
+    ports:
+      - "6379:6379"
+    
+    volumes:
+      # Redis persistence (optional but good to have)
+      - redis_data:/data
+    
+    # Enable persistence - saves data to disk periodically
+    command: redis-server --appendonly yes
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Zookeeper (Required by Kafka)
+  # --------------------------------------------------------------------------
+  # Kafka uses Zookeeper for:
+  # - Cluster coordination
+  # - Leader election
+  # - Configuration management
+  # Note: Newer Kafka (KRaft) doesn't need Zookeeper, but we'll use traditional
+  # --------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: scp_zookeeper
+    restart: unless-stopped
+    
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    
+    ports:
+      - "2181:2181"
+    
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Apache Kafka (Message Queue)
+  # --------------------------------------------------------------------------
+  # Used for: Async communication between services
+  # Examples: 
+  #   - payment.success → notification_worker sends email
+  #   - user.registered → analytics service records
+  # --------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: scp_kafka
+    restart: unless-stopped
+    
+    depends_on:
+      zookeeper:
+        condition: service_healthy  # Wait for Zookeeper to be ready
+    
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      
+      # Listeners - how Kafka advertises itself
+      # INTERNAL: for containers to talk to Kafka (kafka:29092)
+      # EXTERNAL: for your laptop to talk to Kafka (localhost:9092)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1  # Dev only, prod = 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    
+    ports:
+      - "9092:9092"    # External (your laptop)
+      - "29092:29092"  # Internal (other containers)
+    
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Kafka UI (Optional - for debugging/monitoring)
+  # --------------------------------------------------------------------------
+  # Web UI to see topics, messages, consumers
+  # Access at: http://localhost:8080
+  # --------------------------------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: scp_kafka_ui
+    restart: unless-stopped
+    
+    depends_on:
+      - kafka
+    
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    
+    ports:
+      - "8080:8080"
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+# Named volumes - Docker manages storage location
+# Data persists even if containers are deleted
+# To delete volumes: docker-compose down -v
+# ============================================================================
+volumes:
+  postgres_data:
+    name: scp_postgres_data
+  redis_data:
+    name: scp_redis_data
+  zookeeper_data:
+    name: scp_zookeeper_data
+  zookeeper_logs:
+    name: scp_zookeeper_logs
+  kafka_data:
+    name: scp_kafka_data
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+# Default network created automatically by docker-compose
+# All services can communicate using service name as hostname
+# e.g., from auth_service: postgres:5432, redis:6379, kafka:29092
+# ============================================================================
