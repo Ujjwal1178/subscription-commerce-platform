@@ -476,10 +476,97 @@ docker exec -it scp_postgres psql -U postgres -d auth_db
 - Need hash column for lookups + encrypted column for display
 
 ### What's Pending for Next Session:
-- [ ] Business logic for Auth Service
-- [ ] Pydantic schemas
-- [ ] Register API implementation
+- [ ] Business logic (service layer) for Register API
+- [ ] API endpoint for Register
+- [ ] Password hashing with bcrypt
+- [ ] Email/Phone encryption (AES)
+- [ ] OTP generation
 - [ ] JWT token generation
+
+---
+
+# PART 5: Pydantic Schemas + Deep Learning Session
+## Session Date: 24 August 2026 (Monday Late Night)
+
+### What We Did:
+- [x] DB Extension connect karna sikha (PostgreSQL + Redis)
+- [x] Port mapping deep dive (HOST:CONTAINER)
+- [x] Rate limiting discussion (Redis-based, multi-layer)
+- [x] User enumeration attack prevention
+- [x] Data ownership in microservices (Single Source of Truth)
+- [x] Pydantic schemas created (auth.py, user.py)
+- [x] Custom validators for password, phone, OTP
+- [x] `__all__` in Python explained
+- [x] bcrypt vs SHA256 for passwords
+- [x] Salting, peppering, cost factor explained
+
+### Key Concepts Learned:
+
+**Port Mapping:**
+- `5432:5432` = HOST_PORT:CONTAINER_PORT
+- Left = your machine, Right = container internal
+
+**Rate Limiting (Industry Standard):**
+- Layer 1: Global IP limit (100/min)
+- Layer 2: Per endpoint (login: 10/min, register: 5/min)
+- Layer 3: Per user after login (50/min)
+- Storage: Redis (fast, TTL, atomic)
+
+**User Enumeration Prevention:**
+- Same response for existing/non-existing users
+- Generic error messages
+- Rate limiting on sensitive endpoints
+
+**Data Ownership:**
+- Each microservice owns its data
+- Others access via async API calls
+- No duplicate user tables across services
+
+**Password Hashing:**
+- bcrypt over SHA256 (intentionally slow)
+- Salt = random string per user (prevents rainbow tables)
+- Cost factor = adjustable difficulty (rounds=12 recommended)
+- bcrypt stores salt inside the hash itself
+
+**Pydantic:**
+- `Field()` for basic validation (min_length, max_length)
+- `EmailStr` for auto email validation
+- `@field_validator` for custom logic
+- `Optional[str]` for nullable fields
+- `__all__` controls `from module import *`
+
+### Files Created:
+```
+backend/services/auth_service/app/schemas/
+├── __init__.py (exports all schemas)
+├── auth.py (Register, Login, OTP, Refresh, Logout, Password schemas)
+└── user.py (Profile schemas)
+
+questions/security/
+├── rate-limiting.md (10 Q&As)
+└── password-hashing.md (10 Q&As)
+
+questions/microservices/
+└── data-ownership.md (7 Q&As)
+```
+
+### Interview Questions Added (27 new):
+- Rate limiting algorithms (fixed window, sliding window, token bucket)
+- Redis for rate limiting
+- Shared IP problem (office NAT)
+- User enumeration attack
+- Data ownership in microservices
+- bcrypt vs SHA256
+- Salt, pepper, cost factor
+- Rainbow table attacks
+- Password hash migration
+
+### What's Pending for Next Session:
+- [ ] Service layer (business logic)
+- [ ] Register API endpoint
+- [ ] bcrypt password hashing implementation
+- [ ] AES encryption for email/phone
+- [ ] OTP generation and storage
 
 ---
 
