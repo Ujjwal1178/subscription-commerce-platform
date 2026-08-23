@@ -441,6 +441,48 @@ docker exec -it scp_postgres psql -U postgres -d auth_db
 
 ---
 
+# PART 4: SQLAlchemy Deep Dive + Learning Session
+## Session Date: 24 August 2026 (Monday)
+
+### What We Learned (Teaching Session):
+
+**SQLAlchemy Models - Core Concepts:**
+- `Base = declarative_base()` → Parent class for all models
+- `Column()` → Defines database columns
+- `nullable=False` → Required field, NOT NULL constraint
+- `default=uuid.uuid4` → Auto-generate value if not provided
+- `unique=True` → No duplicates allowed + auto-creates index in PostgreSQL
+- `index=True` → Faster lookups (B-tree), redundant if already unique
+- `relationship()` → Link between tables (User → Sessions)
+
+**Encryption vs Hashing (Interview Gold!):**
+- **Hashing:** One-way, same input = same output (SHA256, bcrypt)
+- **Encryption:** Two-way, same input = DIFFERENT output with IV (AES)
+- **Why can't UNIQUE on encrypted column?** → IV makes same data encrypt differently!
+- **Password:** Always HASH (bcrypt) - never need original
+- **PII (email, phone):** ENCRYPT - need to display/send later
+
+**Port Mapping (Docker):**
+- `5432:5432` = `HOST_PORT:CONTAINER_PORT`
+- Left = Your machine's port (what you connect to)
+- Right = Container's internal port
+
+### Interview Questions Added:
+- `questions/databases/encryption-vs-hashing.md` (7 detailed Q&As)
+
+### Key Realizations:
+- UNIQUE constraint auto-creates index in PostgreSQL
+- Encrypted columns can't have UNIQUE (IV makes output different each time)
+- Need hash column for lookups + encrypted column for display
+
+### What's Pending for Next Session:
+- [ ] Business logic for Auth Service
+- [ ] Pydantic schemas
+- [ ] Register API implementation
+- [ ] JWT token generation
+
+---
+
 <!-- 
 TEMPLATE FOR NEW PARTS:
 
