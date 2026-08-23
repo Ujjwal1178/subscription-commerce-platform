@@ -17,6 +17,43 @@ version: '3.8'
 services:
 
   # --------------------------------------------------------------------------
+  # Auth Service (Our first microservice!)
+  # --------------------------------------------------------------------------
+  auth-service:
+    build:
+      context: ./services/auth_service    # Path to Dockerfile
+      dockerfile: Dockerfile
+    container_name: scp_auth_service
+    restart: unless-stopped
+    
+    ports:
+      - "8001:8001"                        # host:container
+    
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/auth_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DEBUG=true
+    
+    volumes:
+      # Mount source code for hot reload (development only)
+      - ./services/auth_service/app:/app/app
+      - ./shared:/app/shared
+      - ./services/auth_service/alembic.ini:/app/alembic.ini
+    
+    depends_on:
+      postgres:
+        condition: service_healthy         # Wait for DB to be ready
+      redis:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --------------------------------------------------------------------------
   # PostgreSQL Database
   # --------------------------------------------------------------------------
   # Why Postgres? ACID compliance, great for transactions (payments!)

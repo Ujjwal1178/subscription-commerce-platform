@@ -298,21 +298,146 @@ git push origin dev
 - [x] Discussed Docker image rebuild concept (when code changes)
 - [x] Volume mounts vs image rebuild for development vs production
 - [x] Added interview question: `docker/image-rebuild-on-code-change.md`
+- [x] Committed and pushed all code to dev branch
+- [x] Started Auth Service Requirements Gathering
+- [x] Discussed JWT Refresh Token storage strategies
+- [x] Device ID approach (Ujjwal's idea!) vs Full Token storage
 
 ### Interview Questions Added This Session:
 - **Docker: Image Rebuild on Code Change** - When to rebuild, volume mounts, dev vs prod setup
+- **Refresh Token Storage** - Why store refresh tokens, device_id approach, stateful vs stateless
 
 ### Key Concepts Covered:
 - Docker images are immutable (frozen at build time)
 - Development uses volume mounts + hot reload (no rebuild needed)
 - Production requires image rebuild for code changes
 - Bind mounts vs Docker volumes
+- **System Design Process:** Requirements → API Design → DB Schema → Implementation
+- **Stateful Refresh, Stateless Access** pattern
+- **Device ID in JWT** - Store device_id in DB, embed in JWT, validate on refresh
+- **Single device login** - Replace device_id on new login, old device's refresh fails
+
+### Auth Service Requirements (Finalized):
+| Requirement | Decision |
+|-------------|----------|
+| Features | Register, Login, Logout, Forgot Password, Change Password |
+| Registration Fields | Full name, Email (verified), Password |
+| Multi-device | Single device (replace device_id on new login) |
+| Access Token | JWT, 7 minutes, stateless |
+| Refresh Token | JWT with device_id, 2 hours, semi-stateful |
+| Token Storage | Store device_id in DB, not full token |
+| Latency Target | Login < 500ms, Refresh < 100ms |
+| Social Login | Later (Google/Apple) |
 
 ### What's Pending:
-- [ ] Test Docker Compose (containers should be running)
-- [ ] Commit current changes to dev branch
-- [ ] Start Auth Service implementation
-- [ ] JWT deep dive
+- [ ] Pydantic schemas (request/response validation)
+- [ ] Register API implementation
+- [ ] Password hashing with bcrypt
+- [ ] Email/Phone encryption utilities
+- [ ] OTP generation and verification
+- [ ] JWT token generation
+
+---
+
+# PART 3: Auth Service Setup Complete
+## Session Date: 23 August 2026 (Sunday Late Night)
+
+### What We Did:
+- [x] Folder restructure: services/, shared/, docker-compose → backend/
+- [x] Auth Service API design (10 APIs documented in docs/api/auth-service-api.md)
+- [x] Database schema design (3 tables documented in docs/database/auth-service-schema.md)
+- [x] Dockerfile created (Python 3.13-slim, layer caching explained)
+- [x] docker-compose.yml - auth-service added with volume mounts
+- [x] Auth Service running on localhost:8001 ✅
+- [x] SQLAlchemy models created (User, UserSession, OTPVerification)
+- [x] Shared database utilities (Base class, engine, session factory)
+- [x] Alembic setup for migrations
+- [x] First migration generated and applied - tables created in auth_db!
+
+### Key Concepts Covered:
+- **Dockerfile layers & caching** - Copy requirements before code for faster rebuilds
+- **python:3.13-slim vs alpine** - Slim for compatibility, alpine smallest but issues
+- **psycopg vs psycopg2** - v3 is newer, better async support, Python 3.13 compatible
+- **Volume mounts in docker-compose** - Live code sync for development
+- **ORM (SQLAlchemy)** - Python classes mapped to DB tables
+- **Why index columns** - B-tree for O(log n) lookups vs O(n) full scan
+- **Cascade delete** - Auto-delete children when parent deleted
+- **autocommit=False** - Transaction control, ACID Atomicity
+- **Connection pooling** - Reuse connections (pool_size=5)
+- **Soft delete vs Hard delete** - is_active flag vs actual DELETE
+- **Alembic migrations** - Version control for database schema
+- **OTP hashing** - Even 6-digit OTP stored as hash for security
+
+### Interview Questions Added:
+- `questions/api-design/api-design-best-practices.md` (7 questions)
+- `questions/security/pii-encryption.md`
+- `questions/databases/orm-and-sqlalchemy.md` (7 questions)
+
+### Files Created/Modified:
+```
+backend/
+├── docker-compose.yml (added auth-service)
+├── shared/
+│   └── database/
+│       └── base.py (SQLAlchemy Base, engine, session)
+└── services/
+    └── auth_service/
+        ├── Dockerfile
+        ├── requirements.txt
+        ├── alembic.ini
+        └── app/
+            ├── main.py (FastAPI entry point)
+            ├── models/
+            │   ├── __init__.py
+            │   ├── user.py
+            │   ├── user_session.py
+            │   └── otp_verification.py
+            └── migrations/
+                ├── env.py
+                └── versions/
+                    └── 624b931af574_create_auth_tables.py
+```
+
+### Database Status:
+```
+auth_db tables:
+✅ users
+✅ user_sessions  
+✅ otp_verifications
+✅ alembic_version (migration tracking)
+```
+
+### Commands to Remember:
+```bash
+# Start all containers
+cd backend
+docker-compose up -d
+
+# View auth service logs
+docker-compose logs -f auth-service
+
+# Run Alembic migrations
+docker exec -w /app scp_auth_service alembic upgrade head
+
+# Generate new migration
+docker exec -w /app scp_auth_service alembic revision --autogenerate -m "description"
+
+# Rollback migration
+docker exec -w /app scp_auth_service alembic downgrade -1
+
+# Connect to auth_db
+docker exec -it scp_postgres psql -U postgres -d auth_db
+\dt  # List tables
+```
+
+### What's Pending for Next Session:
+- [ ] Pydantic schemas (RegisterRequest, LoginRequest, etc.)
+- [ ] Register API implementation
+- [ ] Password hashing with bcrypt
+- [ ] Email/Phone encryption utilities (AES)
+- [ ] OTP generation and verification
+- [ ] JWT token generation (access + refresh)
+- [ ] Login API implementation
 
 ---
 

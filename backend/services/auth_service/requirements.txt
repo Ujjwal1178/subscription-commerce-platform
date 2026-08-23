@@ -1,0 +1,41 @@
+# ============================================================================
+# AUTH SERVICE - DEPENDENCIES
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# Web Framework
+# -----------------------------------------------------------------------------
+fastapi==0.115.0          # FastAPI - async web framework
+uvicorn[standard]==0.30.0 # ASGI server to run FastAPI
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+sqlalchemy==2.0.32        # ORM - Python classes to DB tables
+psycopg[binary]==3.3.4    # PostgreSQL driver (v3 - modern, async support)
+alembic==1.13.2           # Database migrations
+
+# -----------------------------------------------------------------------------
+# Authentication & Security
+# -----------------------------------------------------------------------------
+python-jose[cryptography]==3.3.0  # JWT token creation & verification
+passlib[bcrypt]==1.7.4            # Password hashing (bcrypt)
+bcrypt==4.2.0                     # Bcrypt algorithm
+
+# -----------------------------------------------------------------------------
+# Validation & Settings
+# -----------------------------------------------------------------------------
+pydantic==2.8.2              # Data validation (request/response schemas)
+pydantic-settings==2.4.0     # Load settings from .env files
+python-multipart==0.0.9      # Form data parsing (for login forms)
+email-validator==2.2.0       # Email format validation
+
+# -----------------------------------------------------------------------------
+# Encryption (for PII)
+# -----------------------------------------------------------------------------
+cryptography==43.0.0    # AES encryption for email/phone
+
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
+python-dotenv==1.0.1    # Load .env files
