@@ -16,6 +16,11 @@ psycopg[binary]==3.3.4    # PostgreSQL driver (v3 - modern, async support)
 alembic==1.13.2           # Database migrations
 
 # -----------------------------------------------------------------------------
+# Cache & Rate Limiting
+# -----------------------------------------------------------------------------
+redis==5.0.1              # Redis client for caching, rate limiting
+
+# -----------------------------------------------------------------------------
 # Authentication & Security
 # -----------------------------------------------------------------------------
 python-jose[cryptography]==3.3.0  # JWT token creation & verification

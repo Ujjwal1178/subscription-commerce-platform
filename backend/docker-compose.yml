@@ -29,11 +29,14 @@ services:
     ports:
       - "8001:8001"                        # host:container
     
+    # Load ALL env vars from common .env file
+    env_file:
+      - .env
+    
+    # Service-specific overrides (if needed)
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/auth_db
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=your-secret-key-change-in-production
-      - DEBUG=true
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/auth_db
+      - SERVICE_NAME=auth-service
     
     volumes:
       # Mount source code for hot reload (development only)

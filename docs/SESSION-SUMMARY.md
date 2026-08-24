@@ -562,11 +562,317 @@ questions/microservices/
 - Password hash migration
 
 ### What's Pending for Next Session:
-- [ ] Service layer (business logic)
-- [ ] Register API endpoint
-- [ ] bcrypt password hashing implementation
-- [ ] AES encryption for email/phone
-- [ ] OTP generation and storage
+- [ ] Test Register API
+- [ ] Login method in service layer
+- [ ] Login API endpoint
+- [ ] JWT token generation
+
+---
+
+# PART 6: Register API Complete + Deep Learning
+## Session Date: 25 August 2026 (Monday)
+
+### What We Built:
+
+**Utilities (shared/utils/):**
+- `security.py` - hash_password(), verify_password() (bcrypt)
+- `encryption.py` - encrypt_data(), decrypt_data(), generate_hash() (AES + SHA256)
+- `otp.py` - generate_otp(), hash_otp(), verify_otp()
+
+**Configuration:**
+- `backend/.env` - Common env file for all services
+- `auth_service/app/config.py` - Loads env vars
+- `auth_service/app/logger.py` - Proper logging (no print!)
+
+**Business Logic:**
+- `auth_service/app/services/auth_service.py` - AuthService class with register_user()
+
+**API Layer:**
+- `auth_service/app/dependencies.py` - Database session injection
+- `auth_service/app/api/auth.py` - POST /api/v1/auth/register endpoint
+- `auth_service/app/main.py` - FastAPI app with router
+
+### Key Concepts Learned:
+
+**bcrypt:**
+- rounds=12 means 2^12 = 4096 iterations
+- Salt stored inside hash string
+- Intentionally slow for security
+
+**AES Encryption:**
+- Padding (PKCS7) needed for 16-byte blocks
+- IV stored with ciphertext for decryption
+- Same input + different IV = different output
+
+**Timing Attacks:**
+- Normal `==` comparison leaks timing info
+- `secrets.compare_digest()` = constant time comparison
+
+**Functions vs Classes:**
+- Functions for stateless operations
+- Classes when you need state (like db session)
+
+**SQLAlchemy Internals:**
+- Model class provides table/column mapping
+- `db.add()` marks for insert
+- `db.flush()` executes SQL, keeps transaction open
+- `db.commit()` finalizes transaction
+- `relationship()` = lazy query shortcut
+
+**Connection Pool:**
+- Engine = Pool of connections (reused)
+- Session = New per request (uses connection from pool)
+- pool_size=5, max_overflow=10 (total max 15)
+
+**Horizontal Scaling:**
+- Monitor CPU, memory, response time
+- Auto-scale with Kubernetes HPA or AWS ASG
+- Each instance has own connection pool
+
+**Dependency Injection:**
+- `Depends(get_db)` injects db session
+- `yield` pauses, returns to cleanup after endpoint
+
+### Files Created:
+```
+backend/
+├── .env (common for all services)
+└── services/auth_service/app/
+    ├── config.py
+    ├── logger.py
+    ├── dependencies.py
+    ├── api/
+    │   ├── __init__.py
+    │   └── auth.py (Register endpoint)
+    ├── services/
+    │   └── auth_service.py (Business logic)
+    └── main.py (Updated with router)
+
+shared/utils/
+├── __init__.py
+├── security.py (bcrypt)
+├── encryption.py (AES + SHA256)
+└── otp.py
+
+questions/
+├── databases/sqlalchemy-internals.md
+├── security/timing-attacks.md
+├── security/hashing-and-collision.md
+├── python/functions-vs-classes.md
+└── system-design/horizontal-scaling.md
+```
+
+### Interview Questions Added:
+- SQLAlchemy internals (flush vs commit, relationship)
+- Timing attacks prevention
+- Hashing collision probability
+- Functions vs Classes decision
+- Horizontal scaling metrics and auto-scaling
+
+### API Ready for Testing:
+```
+POST /api/v1/auth/register
+{
+    "user_name": "Ujjwal Thakur",
+    "email": "ujjwal@gmail.com",
+    "phone_number": "+919876543210",
+    "password": "Secret@123"
+}
+```
+
+### What's Pending:
+- [ ] Test Register API (docker-compose up -d --build)
+- [ ] Login method + endpoint
+- [ ] JWT token generation
+- [ ] Verify OTP endpoint
+
+---
+
+# PART 7: Register API Working + Redis Rate Limiting Discussion
+## Session Date: 25 August 2026 (Monday Night)
+
+### What We Did:
+- [x] Fixed ENCRYPTION_KEY length (31 → 32 bytes)
+- [x] Learned `docker-compose restart` vs `stop + up` (env vars don't reload on restart!)
+- [x] Register API tested and working! ✅
+- [x] User created in DB with encrypted PII
+- [x] OTP logged in dev mode (615732)
+- [x] Volume mount + hot reload explained (why no rebuild needed)
+- [x] Rate limiting architecture discussion (Redis vs DB)
+
+### Register API Test Results:
+```json
+// Request
+POST http://localhost:8001/api/v1/auth/register
+{
+    "user_name": "Ujjwal Thakur",
+    "email": "ujjwal@gmail.com",
+    "phone_number": "+919876543210",
+    "password": "Secret@123"
+}
+
+// Response (201 Created)
+{
+    "success": true,
+    "message": "Registration successful. Please verify your email.",
+    "otp_expires_in": 600,
+    "masked_email": "uj****@gmail.com"
+}
+```
+
+### Database Verification:
+- User created with UUID: `33040f8d-25c6-47d7-b886-cf768d236078`
+- email_encrypted: AES encrypted ✅
+- email_hash: SHA256 for lookups ✅
+- password_hash: bcrypt ($2b$12$...) ✅
+- is_email_verified: false (pending OTP verification)
+- OTP record created with hashed OTP
+
+### Key Concepts Learned:
+
+**Docker restart vs stop/up:**
+- `restart` = Same container, env vars NOT reloaded
+- `stop` + `up` = Container recreated, fresh env vars
+- Always verify with: `docker exec container printenv VARIABLE`
+
+**Volume Mount + Hot Reload:**
+- Volume mount = Live link between host and container
+- `--reload` flag watches for file changes
+- Code changes: No rebuild needed
+- requirements.txt changes: Rebuild needed
+
+**Rate Limiting - Where to Store:**
+- DB-based = Slow, DB hit on every request, bad for frequent checks
+- Redis-based = Fast (microseconds), TTL support, atomic operations
+- **Redis = Shield** (fast rejection), **DB = Audit** (persistent record)
+
+**Two Types of Rate Limiting:**
+1. **Redis Rate Limit:** 10 requests/minute (frequent check, temporary)
+2. **DB Attempt Tracking:** 3 lifetime attempts (audit trail, persistent)
+
+### Interview Questions Added (3 new):
+- `questions/system-design/rate-limiting-where.md` - Redis vs DB for rate limiting
+- `questions/docker/restart-vs-stop-up.md` - Environment variables reload
+- `questions/docker/volume-mount-hot-reload.md` - Why no rebuild in dev
+
+### Files Modified:
+- `backend/.env` - Fixed ENCRYPTION_KEY to 32 bytes
+- `backend/services/auth_service/app/services/auth_service.py` - Fixed column name mismatch
+
+### Commands Used:
+```bash
+# Verify env var in container
+docker exec scp_auth_service printenv ENCRYPTION_KEY
+
+# Proper restart for env changes
+docker-compose stop auth-service
+docker compose up -d auth-service
+
+# View logs
+docker logs scp_auth_service --tail 20
+```
+
+### What's Next:
+- [x] Verify OTP API with Redis rate limiting ✅
+- [x] Redis client utility (shared/utils/redis_client.py) ✅
+- [x] Rate limiter utility ✅
+- [ ] Resend OTP API
+- [ ] Login API + JWT generation
+- [ ] Auto-login after OTP verification
+
+---
+
+# PART 8: Verify OTP API + Redis Rate Limiting Complete
+## Session Date: 25 August 2026 (Monday Late Night)
+
+### What We Built:
+
+**Redis Utilities (shared/utils/):**
+- `redis_client.py` - Connection pool, singleton pattern, health check
+- `rate_limiter.py` - Reusable rate limiting with Redis
+
+**Verify OTP Feature:**
+- `auth_service.py` - `verify_otp()` method with full business logic
+- `auth.py` - POST `/api/v1/auth/verify-otp` endpoint
+- `config.py` - Rate limit configuration variables
+
+### Key Concepts Learned:
+
+**Atomic Operations in Redis:**
+- Single Redis command = atomic (no race condition)
+- `INCR` does read+add+write in ONE operation
+- Multiple commands need `MULTI/EXEC` for atomicity
+
+**Fail-Open vs Fail-Closed:**
+- Fail-Open: Allow request if Redis down (better UX)
+- Fail-Closed: Block request if Redis down (more secure)
+- Choice depends on context (payment = closed, general = open)
+
+**Rate Limiting Architecture:**
+- Redis for frequent checks (fast, TTL support)
+- DB for audit trail (persistent, lifetime attempts)
+- Both serve different purposes!
+
+**Docker Learnings:**
+- `requirements.txt` change = image rebuild needed
+- `--no-cache` flag forces fresh build
+- Service-specific requirements, not shared folder
+
+### Files Created/Modified:
+```
+backend/shared/utils/
+├── redis_client.py (NEW) - Connection pool, helpers
+├── rate_limiter.py (NEW) - Rate limit logic
+└── __init__.py (UPDATED) - Export new modules
+
+backend/services/auth_service/
+├── requirements.txt (UPDATED) - Added redis==5.0.1
+├── app/
+│   ├── config.py (UPDATED) - Rate limit config
+│   ├── services/auth_service.py (UPDATED) - verify_otp() method
+│   └── api/auth.py (UPDATED) - verify-otp endpoint
+
+backend/shared/requirements.txt (UPDATED) - Added redis
+
+questions/
+├── resilience/fail-open-fail-closed.md (NEW)
+└── distributed-systems/atomic-operations.md (NEW)
+```
+
+### API Endpoints Working:
+```
+POST /api/v1/auth/register ✅
+POST /api/v1/auth/verify-otp ✅ (NEW!)
+```
+
+### Test Results:
+```
+1. Register new user → 201 Created, OTP in logs ✅
+2. Verify with correct OTP → "Email verified successfully" ✅
+3. Verify expired OTP → "OTP has expired" ✅
+4. Rate limiting via Redis → Working ✅
+```
+
+### Interview Questions Added (2 new):
+- `resilience/fail-open-fail-closed.md` - When to use which strategy
+- `distributed-systems/atomic-operations.md` - Redis INCR, race conditions
+
+### Database State:
+- 2 users in `users` table
+- 2 OTP records in `otp_verifications` table
+- `test@example.com` - `is_email_verified = true` ✅
+
+### What's Pending for Next Session:
+- [ ] Login API with JWT token generation
+- [ ] Auto-login after OTP verification (optional)
+- [ ] Resend OTP API
+- [ ] Refresh token endpoint
+- [ ] Logout endpoint
+
+### Important Decisions Made:
+- **Email hash as Redis key** - No PII in Redis
+- **Fail-open for rate limiting** - UX over temporary vulnerability
+- **Auto-login after verify** - Better UX (implement tomorrow)
 
 ---
 
