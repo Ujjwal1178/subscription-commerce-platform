@@ -36,6 +36,12 @@ from app.schemas import (
     ResendOTPResponse,
     RefreshTokenRequest,
     RefreshTokenResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    VerifyResetOTPRequest,
+    VerifyResetOTPResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
 )
 
 # Shared utilities
@@ -48,7 +54,9 @@ from shared.utils.rate_limiter import check_rate_limit, RateLimitAction
 from shared.utils.jwt import (
     create_access_token,
     create_refresh_token,
+    create_password_reset_token,
     verify_refresh_token,
+    verify_password_reset_token,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_MINUTES,
 )
@@ -1049,3 +1057,384 @@ class AuthService:
             "success": True,
             "message": "Logged out successfully"
         }
+
+
+    # =========================================================================
+    # FORGOT PASSWORD (Step 1: Request OTP)
+    # =========================================================================
+    
+    def forgot_password(self, data: ForgotPasswordRequest) -> ForgotPasswordResponse:
+        """
+        Step 1 of password reset flow - Request OTP.
+        
+        Flow:
+        1. Find user by email
+        2. If user not found → Generic response (security)
+        3. If email not verified → Send verification OTP, indicate redirect
+        4. If verified → Send password reset OTP
+        
+        Args:
+            data: ForgotPasswordRequest with email
+            
+        Returns:
+            ForgotPasswordResponse
+        """
+        email_lower = data.email.lower()
+        
+        # Generic message for security (same for all cases)
+        generic_message = "If the email is registered, you will receive an OTP."
+        
+        # -----------------------------------------------------------------
+        # Step 1: Find User
+        # -----------------------------------------------------------------
+        email_hash = generate_hash(email_lower)
+        user = self._get_user_by_email_hash(email_hash)
+        
+        if not user:
+            # Don't reveal if user exists
+            logger.warning(f"Forgot password for non-existent email: {mask_email(email_lower)}")
+            return ForgotPasswordResponse(
+                success=True,
+                message=generic_message,
+                masked_email=mask_email(email_lower),
+                otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Check if email is verified
+        # -----------------------------------------------------------------
+        if not user.is_email_verified:
+            # Email not verified - send verification OTP first
+            existing_otp = self._get_active_otp(
+                user_id=user.user_id,
+                verification_type="email_verification"
+            )
+            
+            # Check if blocked
+            if existing_otp and existing_otp.is_user_blocked:
+                if existing_otp.blocked_at:
+                    unblock_time = existing_otp.blocked_at + timedelta(minutes=OTP_BLOCK_MINUTES)
+                    if datetime.utcnow() < unblock_time:
+                        remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60) + 1
+                        raise AppException(
+                            message=f"Too many failed attempts. Try again in {remaining_minutes} minutes.",
+                            error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                            status_code=403,
+                            details={"retry_after_minutes": remaining_minutes}
+                        )
+            
+            # Reuse existing OTP if valid
+            if existing_otp and datetime.utcnow() < existing_otp.otp_expires_at:
+                remaining_seconds = int((existing_otp.otp_expires_at - datetime.utcnow()).total_seconds())
+                logger.info(f"Forgot password - reusing verification OTP for user {user.user_id}")
+                
+                return ForgotPasswordResponse(
+                    success=False,
+                    message="Please verify your email first. OTP already sent.",
+                    requires_email_verification=True,
+                    masked_email=mask_email(email_lower),
+                    otp_expires_in=remaining_seconds,
+                )
+            
+            # Generate new verification OTP
+            otp = generate_otp()
+            self._create_otp_record(
+                user_id=user.user_id,
+                otp=otp,
+                verification_type="email_verification"
+            )
+            self.db.commit()
+            
+            log_otp_generated(email=email_lower, otp=otp, user_id=str(user.user_id))
+            logger.info(f"Forgot password - new verification OTP for user {user.user_id}")
+            
+            return ForgotPasswordResponse(
+                success=False,
+                message="Please verify your email first. OTP has been sent.",
+                requires_email_verification=True,
+                masked_email=mask_email(email_lower),
+                otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Email verified - Send password reset OTP
+        # -----------------------------------------------------------------
+        
+        # Check for existing valid password reset OTP
+        existing_reset_otp = self._get_active_otp(
+            user_id=user.user_id,
+            verification_type="password_reset"
+        )
+        
+        # Check if blocked
+        if existing_reset_otp and existing_reset_otp.is_user_blocked:
+            if existing_reset_otp.blocked_at:
+                unblock_time = existing_reset_otp.blocked_at + timedelta(minutes=OTP_BLOCK_MINUTES)
+                if datetime.utcnow() < unblock_time:
+                    remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60) + 1
+                    raise AppException(
+                        message=f"Too many failed attempts. Try again in {remaining_minutes} minutes.",
+                        error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                        status_code=403,
+                        details={"retry_after_minutes": remaining_minutes}
+                    )
+        
+        # Reuse existing OTP if valid and within cooldown
+        if existing_reset_otp and datetime.utcnow() < existing_reset_otp.otp_expires_at:
+            time_since_created = (datetime.utcnow() - existing_reset_otp.otp_created_at).total_seconds()
+            if time_since_created < OTP_RESEND_COOLDOWN:
+                remaining_seconds = int((existing_reset_otp.otp_expires_at - datetime.utcnow()).total_seconds())
+                logger.info(f"Forgot password - reusing reset OTP for user {user.user_id}")
+                
+                return ForgotPasswordResponse(
+                    success=True,
+                    message="OTP already sent. Please check your email.",
+                    masked_email=mask_email(email_lower),
+                    otp_expires_in=remaining_seconds,
+                )
+        
+        # Generate new password reset OTP
+        otp = generate_otp()
+        self._create_otp_record(
+            user_id=user.user_id,
+            otp=otp,
+            verification_type="password_reset"  # Different type!
+        )
+        self.db.commit()
+        
+        log_otp_generated(email=email_lower, otp=otp, user_id=str(user.user_id))
+        logger.info(f"Forgot password - new reset OTP for user {user.user_id}")
+        
+        # TODO: Send password reset email via Kafka
+        
+        return ForgotPasswordResponse(
+            success=True,
+            message=generic_message,
+            masked_email=mask_email(email_lower),
+            otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+        )
+
+    # =========================================================================
+    # VERIFY RESET OTP (Step 2: Verify OTP, Get Temp Token)
+    # =========================================================================
+    
+    def verify_reset_otp(self, data: VerifyResetOTPRequest) -> VerifyResetOTPResponse:
+        """
+        Step 2 of password reset flow - Verify OTP and get temp token.
+        
+        Flow:
+        1. Find user by email
+        2. Find active password_reset OTP
+        3. Verify OTP (same logic as email verification)
+        4. If valid → Generate temp reset token (10 min)
+        5. Invalidate OTP (one-time use)
+        
+        Args:
+            data: VerifyResetOTPRequest with email and otp
+            
+        Returns:
+            VerifyResetOTPResponse with reset_token
+        """
+        email_lower = data.email.lower()
+        
+        # -----------------------------------------------------------------
+        # Step 1: Find User
+        # -----------------------------------------------------------------
+        email_hash = generate_hash(email_lower)
+        user = self._get_user_by_email_hash(email_hash)
+        
+        if not user:
+            logger.warning(f"Verify reset OTP for non-existent email: {mask_email(email_lower)}")
+            raise AppException(
+                message="Invalid OTP or email.",
+                error_code=ErrorCode.OTP_INVALID,
+                status_code=400
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Find Active Password Reset OTP
+        # -----------------------------------------------------------------
+        otp_record = self._get_active_otp(
+            user_id=user.user_id,
+            verification_type="password_reset"
+        )
+        
+        if not otp_record:
+            logger.warning(f"No active reset OTP for user {user.user_id}")
+            raise AppException(
+                message="No active OTP found. Please request a new one.",
+                error_code=ErrorCode.OTP_EXPIRED,
+                status_code=400
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Check OTP Status
+        # -----------------------------------------------------------------
+        
+        # Is user blocked?
+        if otp_record.is_user_blocked:
+            if otp_record.blocked_at:
+                unblock_time = otp_record.blocked_at + timedelta(minutes=OTP_BLOCK_MINUTES)
+                if datetime.utcnow() < unblock_time:
+                    remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60) + 1
+                    raise AppException(
+                        message=f"Account temporarily blocked. Try again in {remaining_minutes} minutes.",
+                        error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                        status_code=403,
+                        details={"retry_after_minutes": remaining_minutes}
+                    )
+                else:
+                    # Unblock
+                    otp_record.is_user_blocked = False
+                    otp_record.blocked_at = None
+                    otp_record.remaining_retry = OTP_MAX_ATTEMPTS
+        
+        # Is OTP expired?
+        if datetime.utcnow() > otp_record.otp_expires_at:
+            logger.warning(f"Reset OTP expired for user {user.user_id}")
+            raise AppException(
+                message="OTP has expired. Please request a new one.",
+                error_code=ErrorCode.OTP_EXPIRED,
+                status_code=400
+            )
+        
+        # Any attempts left?
+        if otp_record.remaining_retry <= 0:
+            otp_record.is_user_blocked = True
+            otp_record.blocked_at = datetime.utcnow()
+            self.db.commit()
+            raise AppException(
+                message=f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes.",
+                error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                status_code=403,
+                details={"blocked_for_minutes": OTP_BLOCK_MINUTES}
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 4: Verify OTP
+        # -----------------------------------------------------------------
+        is_valid = verify_otp(data.otp, otp_record.otp_hash)
+        
+        if not is_valid:
+            otp_record.remaining_retry -= 1
+            remaining = otp_record.remaining_retry
+            
+            if remaining <= 0:
+                otp_record.is_user_blocked = True
+                otp_record.blocked_at = datetime.utcnow()
+                self.db.commit()
+                raise AppException(
+                    message=f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes.",
+                    error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                    status_code=403,
+                    details={"blocked_for_minutes": OTP_BLOCK_MINUTES}
+                )
+            
+            self.db.commit()
+            raise AppException(
+                message=f"Invalid OTP. {remaining} attempts remaining.",
+                error_code=ErrorCode.OTP_INVALID,
+                status_code=400,
+                details={"attempts_remaining": remaining}
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 5: OTP Valid - Generate Reset Token
+        # -----------------------------------------------------------------
+        
+        # Invalidate OTP (one-time use)
+        otp_record.is_otp_valid = False
+        self.db.commit()
+        
+        # Generate temp token (10 minutes)
+        reset_token = create_password_reset_token(
+            user_id=str(user.user_id),
+            expires_minutes=10
+        )
+        
+        logger.info(f"Reset OTP verified for user {user.user_id}, temp token issued")
+        
+        return VerifyResetOTPResponse(
+            success=True,
+            message="OTP verified. You can now reset your password.",
+            reset_token=reset_token,
+            expires_in=600,  # 10 minutes
+        )
+
+    # =========================================================================
+    # RESET PASSWORD (Step 3: Set New Password)
+    # =========================================================================
+    
+    def reset_password(self, data: ResetPasswordRequest) -> ResetPasswordResponse:
+        """
+        Step 3 of password reset flow - Set new password.
+        
+        Flow:
+        1. Verify reset_token (JWT)
+        2. Find user
+        3. Update password hash
+        4. Invalidate all sessions (security)
+        
+        Args:
+            data: ResetPasswordRequest with reset_token and new_password
+            
+        Returns:
+            ResetPasswordResponse
+        """
+        
+        # -----------------------------------------------------------------
+        # Step 1: Verify Reset Token
+        # -----------------------------------------------------------------
+        try:
+            payload = verify_password_reset_token(data.reset_token)
+        except ValueError as e:
+            logger.warning(f"Invalid reset token: {str(e)}")
+            raise AppException(
+                message="Invalid or expired reset link. Please request a new one.",
+                error_code=ErrorCode.INVALID_TOKEN,
+                status_code=400
+            )
+        
+        user_id = payload.get("user_id")
+        
+        # -----------------------------------------------------------------
+        # Step 2: Find User
+        # -----------------------------------------------------------------
+        user = self.db.query(User).filter(
+            User.user_id == user_id,
+            User.is_active == True
+        ).first()
+        
+        if not user:
+            logger.warning(f"Reset password for non-existent user: {user_id}")
+            raise AppException(
+                message="Invalid or expired reset link. Please request a new one.",
+                error_code=ErrorCode.INVALID_TOKEN,
+                status_code=400
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Update Password
+        # -----------------------------------------------------------------
+        user.password_hash = hash_password(data.new_password)
+        
+        # -----------------------------------------------------------------
+        # Step 4: Invalidate All Sessions (Security)
+        # -----------------------------------------------------------------
+        # After password change, log out from all devices
+        self.db.query(UserSession).filter(
+            UserSession.user_id == user_id,
+            UserSession.is_session_active == True
+        ).update({
+            "is_session_active": False,
+            "session_ended_at": datetime.utcnow()
+        })
+        
+        self.db.commit()
+        
+        logger.info(f"Password reset successful for user {user_id}, all sessions invalidated")
+        
+        return ResetPasswordResponse(
+            success=True,
+            message="Password reset successful. Please login with your new password."
+        )

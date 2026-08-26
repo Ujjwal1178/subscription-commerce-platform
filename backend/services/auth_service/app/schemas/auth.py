@@ -346,11 +346,11 @@ class LogoutResponse(CleanResponse):
 
 
 # =============================================================================
-# FORGOT PASSWORD
+# FORGOT PASSWORD (Step 1: Request OTP)
 # =============================================================================
 
 class ForgotPasswordRequest(StrictRequest):
-    """Request body for forgot password."""
+    """Request body for forgot password - Step 1."""
     
     email: EmailStr = Field(
         description="Email to send reset OTP"
@@ -360,17 +360,21 @@ class ForgotPasswordRequest(StrictRequest):
 class ForgotPasswordResponse(CleanResponse):
     """Response after forgot password request."""
     
-    success: bool = True
-    message: str = "If email exists, OTP has been sent"
-    # Note: Same response whether email exists or not (prevent enumeration)
+    success: bool
+    message: str
+    
+    # If email not verified, redirect to verify
+    requires_email_verification: Optional[bool] = None
+    masked_email: Optional[str] = None
+    otp_expires_in: Optional[int] = None  # Seconds
 
 
 # =============================================================================
-# RESET PASSWORD
+# VERIFY RESET OTP (Step 2: Verify OTP, Get Temp Token)
 # =============================================================================
 
-class ResetPasswordRequest(StrictRequest):
-    """Request body for password reset."""
+class VerifyResetOTPRequest(StrictRequest):
+    """Request body for verifying password reset OTP - Step 2."""
     
     email: EmailStr = Field(
         description="Email address"
@@ -382,18 +386,6 @@ class ResetPasswordRequest(StrictRequest):
         description="6-digit OTP from email"
     )
     
-    new_password: str = Field(
-        min_length=8,
-        max_length=128,
-        description="New password"
-    )
-    
-    device_name: Optional[str] = Field(
-        default=None,
-        max_length=100,
-        description="Device name for new session"
-    )
-    
     @field_validator('otp')
     @classmethod
     def validate_otp_format(cls, v: str) -> str:
@@ -401,8 +393,39 @@ class ResetPasswordRequest(StrictRequest):
         if not v.isdigit():
             raise ValueError("OTP must contain only digits")
         return v
+
+
+class VerifyResetOTPResponse(CleanResponse):
+    """Response after successful OTP verification - returns temp token."""
     
-    # Reuse password validation from RegisterRequest
+    success: bool = True
+    message: str = "OTP verified. You can now reset your password."
+    reset_token: str = Field(
+        description="Temporary token for password reset (valid 10 minutes)"
+    )
+    expires_in: int = Field(
+        default=600,
+        description="Token validity in seconds (10 minutes)"
+    )
+
+
+# =============================================================================
+# RESET PASSWORD (Step 3: Set New Password)
+# =============================================================================
+
+class ResetPasswordRequest(StrictRequest):
+    """Request body for password reset - Step 3."""
+    
+    reset_token: str = Field(
+        description="Temporary reset token from verify-reset-otp"
+    )
+    
+    new_password: str = Field(
+        min_length=8,
+        max_length=128,
+        description="New password"
+    )
+    
     @field_validator('new_password')
     @classmethod
     def validate_password_complexity(cls, v: str) -> str:
@@ -431,11 +454,7 @@ class ResetPasswordResponse(CleanResponse):
     """Response after successful password reset."""
     
     success: bool = True
-    message: str = "Password reset successful"
-    access_token: str
-    refresh_token: str
-    token_type: str = "Bearer"
-    expires_in: int = 420
+    message: str = "Password reset successful. Please login with your new password."
 
 
 # =============================================================================

@@ -1083,9 +1083,113 @@ POST /api/v1/auth/logout ✅ (NEW!)
 ```
 
 ### What's Pending:
-- [ ] Test logout API
-- [ ] Forgot password flow
-- [ ] Reset password flow
+- [x] Test logout API ✅
+- [x] Forgot password flow ✅
+- [x] Reset password flow ✅
 - [ ] Change password (logged in)
 - [ ] Get profile (/me) endpoint
+
+---
+
+# PART 11: Forgot Password Flow Complete + All Edge Cases
+## Session Date: 26 August 2026 (Tuesday Late Night)
+
+### What We Built:
+
+**3-Step Forgot Password Flow:**
+1. POST `/api/v1/auth/forgot-password` - Send OTP (type: password_reset)
+2. POST `/api/v1/auth/verify-reset-otp` - Verify OTP → Return temp token (10 min)
+3. POST `/api/v1/auth/reset-password` - Use temp token → Reset password
+
+**Temp Token (NEW JWT Type):**
+- `TokenType.PASSWORD_RESET` added to jwt.py
+- `create_password_reset_token()` - 10 min expiry, restricted scope
+- `verify_password_reset_token()` - Validates type = "password_reset"
+- Cannot be used as access token (type mismatch)
+
+### Why 3 Steps Instead of 2?
+
+**2-Step (Insecure):**
+```
+/forgot-password → OTP
+/reset-password { email, otp, new_password }  ← Anyone can try OTPs!
+```
+
+**3-Step (Secure):**
+```
+/forgot-password → OTP
+/verify-reset-otp → Temp token (OTP invalidated!)
+/reset-password { temp_token, new_password }  ← Token single-use
+```
+
+Temp token prevents OTP guessing attacks since OTP is invalidated after verification.
+
+### Edge Cases Handled:
+
+| Scenario | Response |
+|----------|----------|
+| Forgot password - user not registered | Generic "If registered, OTP sent" |
+| Forgot password - user not verified | "Please verify email first" + sends verification OTP |
+| Forgot password - user blocked | "Account blocked. Try again in X min" |
+| Verify reset OTP - wrong OTP 3x | Blocks for 20 minutes |
+| Reset password - all sessions | Invalidated (security) |
+| Reset password - auto-login? | NO - user must login explicitly |
+
+### Files Modified:
+```
+backend/shared/utils/
+└── jwt.py (TokenType.PASSWORD_RESET, create/verify functions)
+
+backend/services/auth_service/app/
+├── services/auth_service.py (forgot_password, verify_reset_otp, reset_password)
+├── api/auth.py (3 new endpoints)
+├── schemas/auth.py (6 new schemas)
+└── schemas/__init__.py (exports updated)
+
+questions/authentication/
+├── forgot-password-flow.md (NEW - 10+ Q&As)
+└── temp-tokens.md (NEW - Temp token design)
+```
+
+### API Endpoints Now Working (9 Total!):
+```
+POST /api/v1/auth/register ✅
+POST /api/v1/auth/verify-otp ✅
+POST /api/v1/auth/login ✅
+POST /api/v1/auth/resend-otp ✅
+POST /api/v1/auth/refresh ✅
+POST /api/v1/auth/logout ✅
+POST /api/v1/auth/forgot-password ✅ (NEW!)
+POST /api/v1/auth/verify-reset-otp ✅ (NEW!)
+POST /api/v1/auth/reset-password ✅ (NEW!)
+```
+
+### Interview Questions Added:
+- `authentication/forgot-password-flow.md` - Complete flow, edge cases, security
+- `authentication/temp-tokens.md` - What, when, why temp tokens
+
+### Test Results:
+```
+1. Forgot password (verified user) → OTP sent ✅
+2. Verify reset OTP → Temp token returned ✅
+3. Reset password with temp token → Success ✅
+4. Login with new password → Works ✅
+5. Login with old password → "Invalid credentials" ✅
+6. All old sessions invalidated → Verified in DB ✅
+7. Unverified user → "Please verify email first" ✅
+8. Wrong OTP 3x → Blocked for 20 min ✅
+9. Blocked user hits forgot password → Still blocked ✅
+```
+
+### What's Pending:
+- [ ] Change password (for logged-in users)
+- [ ] Get profile (/me) endpoint
+- [ ] Commit and push to dev branch
+- [ ] Start next service (User Subscription Service)
+
+### Important Notes:
+- Block status is shared across ALL OTP flows (verify, reset)
+- Temp token is NOT stored in DB (stateless, short-lived)
+- Password reset invalidates ALL sessions (security best practice)
+- User must login after reset (no auto-login)
 

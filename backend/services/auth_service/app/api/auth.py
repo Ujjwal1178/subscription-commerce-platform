@@ -28,6 +28,12 @@ from app.schemas import (
     RefreshTokenRequest,
     RefreshTokenResponse,
     LogoutResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    VerifyResetOTPRequest,
+    VerifyResetOTPResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     ErrorResponse,
 )
 
@@ -408,3 +414,122 @@ def logout(
         success=result["success"],
         message=result["message"]
     )
+
+
+# =============================================================================
+# FORGOT PASSWORD (Step 1: Request OTP)
+# =============================================================================
+
+@router.post(
+    "/forgot-password",
+    response_model=ForgotPasswordResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OTP sent (if email registered)"},
+        403: {"description": "User blocked", "model": ErrorResponse},
+    },
+    summary="Request password reset OTP",
+    description="""
+    Step 1 of password reset flow.
+    
+    **Flow:**
+    1. Enter email address
+    2. If email not verified → Returns `requires_email_verification=true`
+    3. If verified → Sends password reset OTP
+    
+    **Security:**
+    - Generic response for non-existent emails
+    - Reuses existing OTP if within cooldown
+    - Rate limited
+    """,
+)
+def forgot_password(
+    data: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+) -> ForgotPasswordResponse:
+    """Request password reset OTP."""
+    
+    auth_service = AuthService(db)
+    result = auth_service.forgot_password(data)
+    return result
+
+
+# =============================================================================
+# VERIFY RESET OTP (Step 2: Get Temp Token)
+# =============================================================================
+
+@router.post(
+    "/verify-reset-otp",
+    response_model=VerifyResetOTPResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OTP verified, reset token returned"},
+        400: {"description": "Invalid OTP", "model": ErrorResponse},
+        403: {"description": "User blocked", "model": ErrorResponse},
+    },
+    summary="Verify password reset OTP",
+    description="""
+    Step 2 of password reset flow.
+    
+    **Flow:**
+    1. Submit email + OTP
+    2. If valid → Returns temporary `reset_token` (10 minutes)
+    3. Use reset_token in Step 3 to set new password
+    
+    **Security:**
+    - OTP is invalidated after successful verification (one-time use)
+    - Reset token is short-lived (10 minutes)
+    - Reset token can ONLY be used for password reset
+    """,
+)
+def verify_reset_otp(
+    data: VerifyResetOTPRequest,
+    db: Session = Depends(get_db),
+) -> VerifyResetOTPResponse:
+    """Verify OTP and get reset token."""
+    
+    auth_service = AuthService(db)
+    result = auth_service.verify_reset_otp(data)
+    return result
+
+
+# =============================================================================
+# RESET PASSWORD (Step 3: Set New Password)
+# =============================================================================
+
+@router.post(
+    "/reset-password",
+    response_model=ResetPasswordResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Password reset successful"},
+        400: {"description": "Invalid reset token", "model": ErrorResponse},
+    },
+    summary="Reset password with temp token",
+    description="""
+    Step 3 of password reset flow.
+    
+    **Flow:**
+    1. Submit reset_token (from Step 2) + new_password
+    2. Password is updated
+    3. ALL sessions are invalidated (security)
+    4. User must login with new password
+    
+    **Security:**
+    - Reset token verified (signature, expiry, type)
+    - All existing sessions terminated
+    - User must re-authenticate
+    """,
+)
+def reset_password(
+    data: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+) -> ResetPasswordResponse:
+    """Set new password using reset token."""
+    
+    auth_service = AuthService(db)
+    result = auth_service.reset_password(data)
+    return result

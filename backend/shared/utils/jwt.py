@@ -69,6 +69,7 @@ class TokenType:
     """
     ACCESS = "access"
     REFRESH = "refresh"
+    PASSWORD_RESET = "password_reset"  # Temp token for password reset
 
 
 # =============================================================================
@@ -173,6 +174,40 @@ def create_refresh_token(
     return token
 
 
+def create_password_reset_token(
+    user_id: str,
+    expires_minutes: int = 10
+) -> str:
+    """
+    Create a temporary token for password reset.
+    
+    Password Reset Token:
+    - Short lived (10 minutes default)
+    - Used ONLY for reset-password endpoint
+    - Contains: user_id only (minimal data)
+    - One-time use (invalidated after password change)
+    
+    Args:
+        user_id: User's UUID (as string)
+        expires_minutes: Token validity in minutes (default 10)
+        
+    Returns:
+        JWT token string
+    """
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    
+    payload = {
+        "user_id": user_id,
+        "type": TokenType.PASSWORD_RESET,  # Restricted token type
+        "exp": expire,
+        "iat": datetime.utcnow(),
+    }
+    
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    
+    return token
+
+
 # =============================================================================
 # TOKEN VERIFICATION
 # =============================================================================
@@ -252,6 +287,19 @@ def verify_refresh_token(token: str) -> Dict[str, Any]:
         Payload with: user_id, device_id, type, exp, iat
     """
     return verify_token(token, TokenType.REFRESH)
+
+
+def verify_password_reset_token(token: str) -> Dict[str, Any]:
+    """
+    Verify password reset token.
+    
+    Returns:
+        Payload with: user_id, type, exp, iat
+        
+    Raises:
+        ValueError: If token is invalid, expired, or wrong type
+    """
+    return verify_token(token, TokenType.PASSWORD_RESET)
 
 
 # =============================================================================

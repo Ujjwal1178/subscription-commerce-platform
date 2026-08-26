@@ -30,11 +30,11 @@ from .auth import (
     LogoutRequest,
     LogoutResponse,
     
-    # Forgot Password
+    # Forgot Password (3-step flow)
     ForgotPasswordRequest,
     ForgotPasswordResponse,
-    
-    # Reset Password
+    VerifyResetOTPRequest,
+    VerifyResetOTPResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
     
@@ -66,10 +66,16 @@ __all__ = [
     "RefreshTokenResponse",
     "LogoutRequest",
     "LogoutResponse",
+    
+    # Forgot Password (3-step flow)
     "ForgotPasswordRequest",
     "ForgotPasswordResponse",
+    "VerifyResetOTPRequest",
+    "VerifyResetOTPResponse",
     "ResetPasswordRequest",
     "ResetPasswordResponse",
+    
+    # Common
     "ErrorDetail",
     "ErrorResponse",
     "MessageResponse",
