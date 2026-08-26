@@ -13,10 +13,18 @@ How it works:
 6. After endpoint, get_db() cleanup runs (session closed)
 """
 
-from typing import Generator
+from typing import Generator, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import os
+import sys
+
+# For shared imports
+sys.path.append("/app")
+from shared.utils.jwt import verify_access_token
+from shared.exceptions import AppException, ErrorCode
 
 # Get database URL from environment
 DATABASE_URL = os.getenv(
@@ -40,6 +48,10 @@ SessionLocal = sessionmaker(
 )
 
 
+# =============================================================================
+# DATABASE DEPENDENCY
+# =============================================================================
+
 def get_db() -> Generator[Session, None, None]:
     """
     Database session dependency.
@@ -61,3 +73,48 @@ def get_db() -> Generator[Session, None, None]:
         yield db      # Endpoint runs here with db session
     finally:
         db.close()    # Always cleanup, even if error
+
+
+# =============================================================================
+# AUTHENTICATION DEPENDENCY
+# =============================================================================
+
+# HTTPBearer extracts token from "Authorization: Bearer <token>" header
+security = HTTPBearer()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> Dict[str, Any]:
+    """
+    Verify access token and return user info.
+    
+    Usage in protected endpoint:
+        @router.post("/logout")
+        def logout(current_user: dict = Depends(get_current_user)):
+            user_id = current_user["user_id"]
+            device_id = current_user["device_id"]
+    
+    Flow:
+        1. Extract token from Authorization header
+        2. Verify JWT signature and expiry
+        3. Return payload (user_id, device_id, user_name)
+    
+    Raises:
+        HTTPException 401: Invalid or expired token
+    """
+    token = credentials.credentials
+    
+    try:
+        payload = verify_access_token(token)
+        return {
+            "user_id": payload["user_id"],
+            "device_id": payload["device_id"],
+            "user_name": payload.get("user_name"),
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

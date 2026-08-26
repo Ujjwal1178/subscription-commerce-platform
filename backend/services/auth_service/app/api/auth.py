@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 # Dependencies
-from app.dependencies import get_db
+from app.dependencies import get_db, get_current_user
 
 # Schemas (request/response validation)
 from app.schemas import (
@@ -25,6 +25,9 @@ from app.schemas import (
     LoginResponse,
     ResendOTPRequest,
     ResendOTPResponse,
+    RefreshTokenRequest,
+    RefreshTokenResponse,
+    LogoutResponse,
     ErrorResponse,
 )
 
@@ -284,3 +287,124 @@ def resend_otp(
     # Service layer raises AppException - handler catches it automatically!
     result = auth_service.resend_otp(data)
     return result
+
+
+# =============================================================================
+# REFRESH TOKEN ENDPOINT
+# =============================================================================
+
+@router.post(
+    "/refresh",
+    response_model=RefreshTokenResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Token refreshed successfully"},
+        401: {"description": "Invalid or expired session", "model": ErrorResponse},
+    },
+    summary="Refresh access token",
+    description="""
+    Get a new access token using a valid refresh token.
+    
+    **Flow:**
+    1. Verify refresh token (signature, expiry, type)
+    2. Check user exists and is active
+    3. Check session exists with matching device_id
+    4. Generate new access token
+    5. Update last_activity_at
+    
+    **Security:**
+    - No new refresh token (strict 2-hour session limit)
+    - Device ID validation (single device login)
+    - Generic error messages (security)
+    
+    **When to call:**
+    - When access token expires (HTTP 401)
+    - Proactively before expiry (check exp claim)
+    """,
+)
+def refresh(
+    data: RefreshTokenRequest,
+    db: Session = Depends(get_db),
+) -> RefreshTokenResponse:
+    """
+    Refresh access token.
+    
+    Args:
+        data: RefreshTokenRequest with refresh_token
+        db: Database session (injected by FastAPI)
+        
+    Returns:
+        RefreshTokenResponse with new access_token
+        
+    Raises:
+        HTTPException 401: Invalid/expired token or session
+    """
+    
+    auth_service = AuthService(db)
+    
+    # Service layer raises AppException - handler catches it automatically!
+    result = auth_service.refresh_token(data)
+    return result
+
+
+# =============================================================================
+# LOGOUT ENDPOINT
+# =============================================================================
+
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Logged out successfully"},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+    },
+    summary="Logout user",
+    description="""
+    End the current user session.
+    
+    **Requires:** Valid access token in Authorization header
+    
+    **Flow:**
+    1. Verify access token
+    2. Extract user_id and device_id
+    3. Find active session
+    4. Mark session as ended (is_session_active = false)
+    
+    **Idempotent:** 
+    Calling logout twice returns success both times.
+    (Already logged out = still logged out)
+    
+    **After logout:**
+    - Access token will still work until it expires (stateless)
+    - Refresh token will fail (session check)
+    """,
+)
+def logout(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LogoutResponse:
+    """
+    Logout user and end session.
+    
+    Args:
+        current_user: User info from access token (injected by dependency)
+        db: Database session (injected by FastAPI)
+        
+    Returns:
+        LogoutResponse with success message
+    """
+    
+    auth_service = AuthService(db)
+    
+    result = auth_service.logout(
+        user_id=current_user["user_id"],
+        device_id=current_user["device_id"]
+    )
+    
+    return LogoutResponse(
+        success=result["success"],
+        message=result["message"]
+    )

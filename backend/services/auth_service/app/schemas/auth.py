@@ -319,6 +319,7 @@ class RefreshTokenResponse(CleanResponse):
     """Response after successful token refresh."""
     
     success: bool = True
+    message: str = "Token refreshed successfully"
     access_token: str
     token_type: str = "Bearer"
     expires_in: int = 420

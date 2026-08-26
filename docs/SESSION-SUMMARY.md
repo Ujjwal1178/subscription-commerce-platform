@@ -1018,3 +1018,74 @@ TEMPLATE FOR NEW PARTS:
 - 
 
 -->
+
+
+---
+
+# PART 10: Refresh Token + Logout + Session History Fix
+## Session Date: 26 August 2026 (Tuesday Continued)
+
+### What We Built:
+
+**Refresh Token API:**
+- POST `/api/v1/auth/refresh` - Get new access token using refresh token
+- Validates: JWT signature, expiry, type, user exists, user active, session active, device_id match
+- NO new refresh token (strict 2-hour session limit)
+- Generic error messages (security)
+
+**Logout API:**
+- POST `/api/v1/auth/logout` - End current session
+- Requires access token in Authorization header
+- Marks `is_session_active = false`, sets `session_ended_at`
+- Idempotent (logout twice = success both times)
+
+**Session History Fix (Bug Found by Ujjwal!):**
+- **OLD (buggy):** Updated same session row on new login (no history)
+- **NEW (correct):** Create NEW session row + mark old as inactive
+- Now preserves 30-day login history for audit trail
+- Can show "Recent login activity" feature
+
+### Key Decisions:
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Refresh returns new refresh token? | NO | Strict 2-hour limit, security |
+| Check is_email_verified in refresh? | NO | Already verified at login, won't change |
+| Check is_active in refresh? | YES | User can be banned anytime |
+| Logout accepts which token? | Access Token (header) | Standard pattern |
+| Session on new login | Create new row | Preserve history for audit |
+
+### Files Modified:
+```
+backend/services/auth_service/app/
+├── dependencies.py (get_current_user for protected routes)
+├── services/auth_service.py (refresh_token, logout, session fix)
+├── api/auth.py (refresh, logout endpoints)
+└── schemas/auth.py (RefreshTokenResponse message field)
+```
+
+### API Endpoints Now Working:
+```
+POST /api/v1/auth/register ✅
+POST /api/v1/auth/verify-otp ✅
+POST /api/v1/auth/login ✅
+POST /api/v1/auth/resend-otp ✅
+POST /api/v1/auth/refresh ✅ (NEW!)
+POST /api/v1/auth/logout ✅ (NEW!)
+```
+
+### Refresh Token Flow (Tested):
+```
+1. Login → Get access_token + refresh_token
+2. Call /refresh with refresh_token → Get NEW access_token
+3. Same device_id in both tokens ✅
+4. Login again → OLD refresh token fails (device_id changed) ✅
+```
+
+### What's Pending:
+- [ ] Test logout API
+- [ ] Forgot password flow
+- [ ] Reset password flow
+- [ ] Change password (logged in)
+- [ ] Get profile (/me) endpoint
+

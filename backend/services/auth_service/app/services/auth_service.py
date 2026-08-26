@@ -34,6 +34,8 @@ from app.schemas import (
     OTPStatusResponse,
     ResendOTPRequest,
     ResendOTPResponse,
+    RefreshTokenRequest,
+    RefreshTokenResponse,
 )
 
 # Shared utilities
@@ -46,6 +48,7 @@ from shared.utils.rate_limiter import check_rate_limit, RateLimitAction
 from shared.utils.jwt import (
     create_access_token,
     create_refresh_token,
+    verify_refresh_token,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_MINUTES,
 )
@@ -677,12 +680,16 @@ class AuthService:
         device_name: Optional[str] = None
     ) -> UserSession:
         """
-        Create or update user session.
+        Create new session and deactivate old ones.
         
         Single Device Login:
-        - Find existing active session for user
-        - Update device_id (old device gets logged out automatically)
-        - If no session exists, create new one
+        - Deactivate ALL existing active sessions (mark ended)
+        - Create NEW session row (preserves history!)
+        
+        Why new row instead of update?
+        - Preserves login history (audit trail)
+        - Can show "Recent login activity" to user
+        - Each session has its own session_id, timestamps
         
         Args:
             user_id: User's UUID
@@ -690,35 +697,32 @@ class AuthService:
             device_name: Human readable device name (e.g., 'Chrome on Windows')
             
         Returns:
-            UserSession object
+            New UserSession object
         """
-        # Find existing active session for this user
-        session = self.db.query(UserSession).filter(
+        # Step 1: Deactivate ALL existing active sessions for this user
+        # This logs out the old device automatically
+        self.db.query(UserSession).filter(
             UserSession.user_id == user_id,
             UserSession.is_session_active == True
-        ).first()
+        ).update({
+            "is_session_active": False,
+            "session_ended_at": datetime.utcnow()
+        })
         
-        if session:
-            # Update existing session with new device_id
-            # This invalidates the old device's refresh token!
-            # Old device will get 401 on next refresh attempt
-            session.device_id = device_id
-            session.device_name = device_name or session.device_name  # Keep old if not provided
-            session.last_activity_at = datetime.utcnow()
-            session.session_started_at = datetime.utcnow()
-            logger.info(f"Session updated for user {user_id}, old device logged out")
-        else:
-            # Create new session
-            session = UserSession(
-                user_id=user_id,
-                device_id=device_id,
-                device_name=device_name,
-                is_session_active=True,
-                session_started_at=datetime.utcnow(),
-                last_activity_at=datetime.utcnow(),
-            )
-            self.db.add(session)
-            logger.info(f"New session created for user {user_id}")
+        logger.info(f"Deactivated previous sessions for user {user_id}")
+        
+        # Step 2: Create NEW session (always create, never update!)
+        session = UserSession(
+            user_id=user_id,
+            device_id=device_id,
+            device_name=device_name,
+            is_session_active=True,
+            session_started_at=datetime.utcnow(),
+            last_activity_at=datetime.utcnow(),
+        )
+        self.db.add(session)
+        
+        logger.info(f"New session created for user {user_id}, device: {device_name or 'Unknown'}")
         
         return session
 
@@ -879,3 +883,169 @@ class AuthService:
             otp_expires_in=OTP_EXPIRY_MINUTES * 60,
             can_resend_in=OTP_RESEND_COOLDOWN,
         )
+
+    # =========================================================================
+    # REFRESH TOKEN
+    # =========================================================================
+    
+    def refresh_token(self, data: RefreshTokenRequest) -> RefreshTokenResponse:
+        """
+        Refresh access token using a valid refresh token.
+        
+        Flow:
+        1. Verify JWT (signature, expiry, type)
+        2. Extract user_id and device_id from token
+        3. Check user exists and is_active
+        4. Check session exists and is_active with matching device_id
+        5. Generate new access token
+        6. Update last_activity_at
+        
+        Security:
+        - Generic error messages (don't reveal why it failed)
+        - No new refresh token (strict 2-hour session limit)
+        - Device ID validation (single device login)
+        
+        Args:
+            data: RefreshTokenRequest with refresh_token
+            
+        Returns:
+            RefreshTokenResponse with new access_token
+        """
+        
+        # -----------------------------------------------------------------
+        # Step 1: Verify JWT
+        # -----------------------------------------------------------------
+        try:
+            payload = verify_refresh_token(data.refresh_token)
+        except ValueError as e:
+            logger.warning(f"Invalid refresh token: {str(e)}")
+            raise AppException(
+                message="Session expired. Please login again.",
+                error_code=ErrorCode.SESSION_EXPIRED,
+                status_code=401
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Extract user_id and device_id
+        # -----------------------------------------------------------------
+        user_id = payload.get("user_id")
+        device_id = payload.get("device_id")
+        
+        if not user_id or not device_id:
+            logger.warning("Refresh token missing user_id or device_id")
+            raise AppException(
+                message="Session expired. Please login again.",
+                error_code=ErrorCode.SESSION_EXPIRED,
+                status_code=401
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Check user exists and is_active
+        # -----------------------------------------------------------------
+        user = self.db.query(User).filter(
+            User.user_id == user_id,
+            User.is_active == True
+        ).first()
+        
+        if not user:
+            logger.warning(f"Refresh attempt for non-existent/inactive user: {user_id}")
+            raise AppException(
+                message="Session expired. Please login again.",
+                error_code=ErrorCode.SESSION_EXPIRED,
+                status_code=401
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 4: Check session exists with matching device_id
+        # -----------------------------------------------------------------
+        session = self.db.query(UserSession).filter(
+            UserSession.user_id == user_id,
+            UserSession.device_id == device_id,
+            UserSession.is_session_active == True
+        ).first()
+        
+        if not session:
+            logger.warning(f"Refresh attempt with invalid session/device: user={user_id}, device={device_id}")
+            raise AppException(
+                message="Session expired. Please login again.",
+                error_code=ErrorCode.SESSION_EXPIRED,
+                status_code=401
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 5: Generate new access token
+        # -----------------------------------------------------------------
+        new_access_token = create_access_token(
+            user_id=str(user.user_id),
+            user_name=user.user_name,
+            device_id=device_id
+        )
+        
+        # -----------------------------------------------------------------
+        # Step 6: Update last_activity_at
+        # -----------------------------------------------------------------
+        session.last_activity_at = datetime.utcnow()
+        self.db.commit()
+        
+        logger.info(f"Token refreshed for user {user_id}")
+        
+        return RefreshTokenResponse(
+            success=True,
+            message="Token refreshed successfully",
+            access_token=new_access_token,
+            token_type="Bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+
+
+    # =========================================================================
+    # LOGOUT
+    # =========================================================================
+    
+    def logout(self, user_id: str, device_id: str) -> dict:
+        """
+        Logout user by deactivating their session.
+        
+        Flow:
+        1. Find active session for user_id + device_id
+        2. Mark session as ended
+        3. Return success
+        
+        Note: We receive user_id and device_id from the verified access token
+        (extracted by the API layer dependency).
+        
+        Args:
+            user_id: User's UUID (from access token)
+            device_id: Device identifier (from access token)
+            
+        Returns:
+            Dict with success status
+        """
+        # Find the active session
+        session = self.db.query(UserSession).filter(
+            UserSession.user_id == user_id,
+            UserSession.device_id == device_id,
+            UserSession.is_session_active == True
+        ).first()
+        
+        if not session:
+            # Session already ended or doesn't exist
+            # Return success anyway (idempotent - logout twice = still logged out)
+            logger.info(f"Logout called for already ended session: user={user_id}")
+            return {
+                "success": True,
+                "message": "Logged out successfully"
+            }
+        
+        # Deactivate session
+        session.is_session_active = False
+        session.session_ended_at = datetime.utcnow()
+        
+        self.db.commit()
+        
+        logger.info(f"User {user_id} logged out successfully")
+        
+        return {
+            "success": True,
+            "message": "Logged out successfully"
+        }
