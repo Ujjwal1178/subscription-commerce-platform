@@ -23,6 +23,17 @@ from .rate_limiter import (
     rate_limiter,
     check_rate_limit,
 )
+from .jwt import (
+    create_access_token,
+    create_refresh_token,
+    verify_access_token,
+    verify_refresh_token,
+    verify_token,
+    decode_token_unsafe,
+    TokenType,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_MINUTES,
+)
 
 __all__ = [
     # Security (Password)
@@ -55,4 +66,15 @@ __all__ = [
     "RateLimitInfo",
     "rate_limiter",
     "check_rate_limit",
+    
+    # JWT
+    "create_access_token",
+    "create_refresh_token",
+    "verify_access_token",
+    "verify_refresh_token",
+    "verify_token",
+    "decode_token_unsafe",
+    "TokenType",
+    "ACCESS_TOKEN_EXPIRE_MINUTES",
+    "REFRESH_TOKEN_EXPIRE_MINUTES",
 ]

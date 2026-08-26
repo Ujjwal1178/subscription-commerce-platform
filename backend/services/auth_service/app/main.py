@@ -17,6 +17,9 @@ from app.logger import logger
 # Import config
 from app.config import IS_DEV_MODE, SERVICE_NAME, SERVICE_VERSION
 
+# Import exception handlers
+from app.exception_handlers import register_exception_handlers
+
 
 # =============================================================================
 # CREATE FASTAPI APPLICATION
@@ -29,6 +32,13 @@ app = FastAPI(
     docs_url="/docs" if IS_DEV_MODE else None,      # Swagger UI (dev only)
     redoc_url="/redoc" if IS_DEV_MODE else None,    # ReDoc (dev only)
 )
+
+
+# =============================================================================
+# EXCEPTION HANDLERS - Must be registered before routes!
+# =============================================================================
+
+register_exception_handlers(app)
 
 
 # =============================================================================

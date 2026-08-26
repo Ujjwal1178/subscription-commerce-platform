@@ -18,6 +18,10 @@ from .auth import (
     VerifyOTPResponse,
     OTPStatusResponse,
     
+    # Resend OTP
+    ResendOTPRequest,
+    ResendOTPResponse,
+    
     # Refresh Token
     RefreshTokenRequest,
     RefreshTokenResponse,
@@ -56,6 +60,8 @@ __all__ = [
     "VerifyOTPRequest",
     "VerifyOTPResponse",
     "OTPStatusResponse",
+    "ResendOTPRequest",
+    "ResendOTPResponse",
     "RefreshTokenRequest",
     "RefreshTokenResponse",
     "LogoutRequest",

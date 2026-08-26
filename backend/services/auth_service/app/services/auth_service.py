@@ -11,6 +11,7 @@ Handles:
 This is the ORCHESTRATOR - it uses:
 - Database models (User, UserSession, OTPVerification)
 - Shared utilities (password hashing, encryption, OTP)
+- Custom Exceptions (AppException for consistent error handling)
 """
 
 from datetime import datetime, timedelta
@@ -31,6 +32,8 @@ from app.schemas import (
     VerifyOTPRequest,
     VerifyOTPResponse,
     OTPStatusResponse,
+    ResendOTPRequest,
+    ResendOTPResponse,
 )
 
 # Shared utilities
@@ -40,6 +43,18 @@ from shared.utils.security import hash_password, verify_password
 from shared.utils.encryption import encrypt_data, decrypt_data, generate_hash, mask_email
 from shared.utils.otp import generate_otp, hash_otp, verify_otp
 from shared.utils.rate_limiter import check_rate_limit, RateLimitAction
+from shared.utils.jwt import (
+    create_access_token,
+    create_refresh_token,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_MINUTES,
+)
+
+# Custom Exceptions - raise these instead of ValueError!
+from shared.exceptions import AppException, ErrorCode
+
+# For generating device_id
+import uuid
 
 # Config
 from app.config import (
@@ -49,6 +64,11 @@ from app.config import (
     IS_DEV_MODE,
     OTP_VERIFY_RATE_LIMIT,
     OTP_VERIFY_RATE_WINDOW,
+    LOGIN_RATE_LIMIT,
+    LOGIN_RATE_WINDOW,
+    OTP_RESEND_RATE_LIMIT,
+    OTP_RESEND_RATE_WINDOW,
+    OTP_RESEND_COOLDOWN,
 )
 
 # Logger
@@ -111,7 +131,11 @@ class AuthService:
         # Step 2: Check if email already exists
         existing_user = self._get_user_by_email_hash(email_hash)
         if existing_user:
-            raise ValueError("Email already registered")
+            raise AppException(
+                message="Email already registered",
+                error_code=ErrorCode.EMAIL_ALREADY_REGISTERED,
+                status_code=409
+            )
         
         # Step 3: Hash password
         password_hash = hash_password(data.password)
@@ -278,8 +302,11 @@ class AuthService:
                 f"OTP verify rate limited for {mask_email(email_lower)}, "
                 f"retry after {rate_result.retry_after}s"
             )
-            raise ValueError(
-                f"Too many attempts. Please try again in {rate_result.retry_after} seconds."
+            raise AppException(
+                message=f"Too many attempts. Please try again in {rate_result.retry_after} seconds.",
+                error_code=ErrorCode.RATE_LIMITED,
+                status_code=429,
+                details={"retry_after": rate_result.retry_after}
             )
         
         # -----------------------------------------------------------------
@@ -291,7 +318,11 @@ class AuthService:
         if not user:
             # Don't reveal if user exists or not (security)
             logger.warning(f"OTP verify attempt for non-existent email: {mask_email(email_lower)}")
-            raise ValueError("Invalid OTP or email.")
+            raise AppException(
+                message="Invalid OTP or email.",
+                error_code=ErrorCode.OTP_INVALID,
+                status_code=400
+            )
         
         # Already verified?
         if user.is_email_verified:
@@ -312,7 +343,11 @@ class AuthService:
         
         if not otp_record:
             logger.warning(f"No active OTP found for user {user.user_id}")
-            raise ValueError("No active OTP found. Please request a new one.")
+            raise AppException(
+                message="No active OTP found. Please request a new one.",
+                error_code=ErrorCode.OTP_EXPIRED,
+                status_code=400
+            )
         
         # -----------------------------------------------------------------
         # Step 4: Check OTP Status
@@ -326,8 +361,11 @@ class AuthService:
                 if datetime.utcnow() < unblock_time:
                     remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60)
                     logger.warning(f"User {user.user_id} is blocked for OTP, {remaining_minutes} min remaining")
-                    raise ValueError(
-                        f"Account temporarily blocked. Try again in {remaining_minutes} minutes."
+                    raise AppException(
+                        message=f"Account temporarily blocked. Try again in {remaining_minutes} minutes.",
+                        error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                        status_code=403,
+                        details={"retry_after_minutes": remaining_minutes}
                     )
                 else:
                     # Block period passed, unblock user
@@ -339,7 +377,11 @@ class AuthService:
         # Is OTP expired?
         if datetime.utcnow() > otp_record.otp_expires_at:
             logger.warning(f"OTP expired for user {user.user_id}")
-            raise ValueError("OTP has expired. Please request a new one.")
+            raise AppException(
+                message="OTP has expired. Please request a new one.",
+                error_code=ErrorCode.OTP_EXPIRED,
+                status_code=400
+            )
         
         # Any attempts left?
         if otp_record.remaining_retry <= 0:
@@ -348,8 +390,11 @@ class AuthService:
             otp_record.blocked_at = datetime.utcnow()
             self.db.commit()
             logger.warning(f"User {user.user_id} blocked due to max OTP attempts")
-            raise ValueError(
-                f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes."
+            raise AppException(
+                message=f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes.",
+                error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                status_code=403,
+                details={"blocked_for_minutes": OTP_BLOCK_MINUTES}
             )
         
         # -----------------------------------------------------------------
@@ -368,13 +413,21 @@ class AuthService:
                 otp_record.blocked_at = datetime.utcnow()
                 self.db.commit()
                 logger.warning(f"User {user.user_id} blocked after failed OTP attempt")
-                raise ValueError(
-                    f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes."
+                raise AppException(
+                    message=f"Maximum attempts exceeded. Account blocked for {OTP_BLOCK_MINUTES} minutes.",
+                    error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                    status_code=403,
+                    details={"blocked_for_minutes": OTP_BLOCK_MINUTES}
                 )
             
             self.db.commit()
             logger.info(f"Wrong OTP for user {user.user_id}, {remaining} attempts left")
-            raise ValueError(f"Invalid OTP. {remaining} attempts remaining.")
+            raise AppException(
+                message=f"Invalid OTP. {remaining} attempts remaining.",
+                error_code=ErrorCode.OTP_INVALID,
+                status_code=400,
+                details={"attempts_remaining": remaining}
+            )
         
         # -----------------------------------------------------------------
         # Step 6: OTP Correct! Mark as Verified
@@ -422,3 +475,407 @@ class AuthService:
         ).order_by(
             OTPVerification.otp_created_at.desc()  # Most recent first
         ).first()
+
+    # =========================================================================
+    # LOGIN
+    # =========================================================================
+    
+    def login(self, data: LoginRequest) -> LoginResponse:
+        """
+        Authenticate user and return JWT tokens.
+        
+        Flow:
+        1. Rate limit check (Redis) - 10 attempts/minute
+        2. Find user by email
+        3. Verify password
+        4. Check if email is verified
+           - No → Send OTP, return "verify email first"
+           - Yes → Continue
+        5. Create/Update session (device_id)
+        6. Generate JWT tokens
+        7. Return tokens
+        
+        Args:
+            data: LoginRequest with email and password
+            
+        Returns:
+            LoginResponse with tokens or OTP redirect
+            
+        Raises:
+            ValueError: Invalid credentials, rate limited, etc.
+        """
+        email_lower = data.email.lower()
+        
+        # -----------------------------------------------------------------
+        # Step 1: Rate Limit Check (Redis)
+        # -----------------------------------------------------------------
+        rate_result = check_rate_limit(
+            action=RateLimitAction.LOGIN,
+            identifier=email_lower,
+            limit=LOGIN_RATE_LIMIT,
+            window_seconds=LOGIN_RATE_WINDOW
+        )
+        
+        if not rate_result.allowed:
+            logger.warning(
+                f"Login rate limited for {mask_email(email_lower)}, "
+                f"retry after {rate_result.retry_after}s"
+            )
+            raise AppException(
+                message=f"Too many login attempts. Please try again in {rate_result.retry_after} seconds.",
+                error_code=ErrorCode.RATE_LIMITED,
+                status_code=429,
+                details={"retry_after": rate_result.retry_after}
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Find User
+        # -----------------------------------------------------------------
+        email_hash = generate_hash(email_lower)
+        user = self._get_user_by_email_hash(email_hash)
+        
+        if not user:
+            # Don't reveal if user exists (security - prevent enumeration)
+            logger.warning(f"Login attempt for non-existent email: {mask_email(email_lower)}")
+            raise AppException(
+                message="Invalid email or password.",
+                error_code=ErrorCode.INVALID_CREDENTIALS,
+                status_code=400
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Verify Password
+        # -----------------------------------------------------------------
+        if not verify_password(data.password, user.password_hash):
+            logger.warning(f"Invalid password for user {user.user_id}")
+            raise AppException(
+                message="Invalid email or password.",
+                error_code=ErrorCode.INVALID_CREDENTIALS,
+                status_code=400
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 4: Check Email Verification
+        # -----------------------------------------------------------------
+        if not user.is_email_verified:
+            # Check if valid OTP already exists
+            existing_otp = self._get_active_otp(
+                user_id=user.user_id,
+                verification_type="email_verification"
+            )
+            
+            if existing_otp:
+                # Check if user is blocked
+                if existing_otp.is_user_blocked:
+                    if existing_otp.blocked_at:
+                        unblock_time = existing_otp.blocked_at + timedelta(minutes=OTP_BLOCK_MINUTES)
+                        if datetime.utcnow() < unblock_time:
+                            remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60) + 1
+                            logger.warning(f"Login blocked - user {user.user_id} is OTP blocked")
+                            raise AppException(
+                                message=f"Too many failed attempts. Try again in {remaining_minutes} minutes.",
+                                error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                                status_code=403,
+                                details={"retry_after_minutes": remaining_minutes}
+                            )
+                        else:
+                            # Block period passed, unblock
+                            existing_otp.is_user_blocked = False
+                            existing_otp.blocked_at = None
+                            existing_otp.remaining_retry = OTP_MAX_ATTEMPTS
+                
+                # Check if OTP is still valid (not expired)
+                if datetime.utcnow() < existing_otp.otp_expires_at:
+                    # OTP still valid - reuse it, don't generate new
+                    remaining_seconds = int((existing_otp.otp_expires_at - datetime.utcnow()).total_seconds())
+                    
+                    logger.info(f"Login blocked - reusing existing OTP for user {user.user_id}, {remaining_seconds}s remaining")
+                    
+                    return LoginResponse(
+                        success=False,
+                        message="Please verify your email. OTP already sent.",
+                        requires_otp=True,
+                        masked_email=mask_email(email_lower),
+                        otp_expires_in=remaining_seconds,
+                    )
+            
+            # No valid OTP exists OR OTP expired - generate new one
+            otp = generate_otp()
+            self._create_otp_record(
+                user_id=user.user_id,
+                otp=otp,
+                verification_type="email_verification"
+            )
+            self.db.commit()
+            
+            # Log OTP (dev mode only)
+            log_otp_generated(
+                email=email_lower,
+                otp=otp,
+                user_id=str(user.user_id)
+            )
+            
+            logger.info(f"Login blocked - new OTP generated for user {user.user_id}")
+            
+            # Return response indicating OTP verification needed
+            return LoginResponse(
+                success=False,
+                message="Please verify your email first. OTP has been sent.",
+                requires_otp=True,
+                masked_email=mask_email(email_lower),
+                otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 5: Create/Update Session (Device ID)
+        # -----------------------------------------------------------------
+        device_id = str(uuid.uuid4())  # Generate new device_id
+        
+        # Update or create session
+        # Single device login: Replace existing session
+        session = self._create_or_update_session(
+            user_id=user.user_id,
+            device_id=device_id,
+            device_name=data.device_name  # From frontend (optional)
+        )
+        
+        # -----------------------------------------------------------------
+        # Step 6: Generate JWT Tokens
+        # -----------------------------------------------------------------
+        access_token = create_access_token(
+            user_id=str(user.user_id),
+            user_name=user.user_name,
+            device_id=device_id
+        )
+        
+        refresh_token = create_refresh_token(
+            user_id=str(user.user_id),
+            device_id=device_id
+        )
+        
+        self.db.commit()
+        
+        logger.info(f"User {user.user_id} logged in successfully")
+        
+        # -----------------------------------------------------------------
+        # Step 7: Return Success Response
+        # -----------------------------------------------------------------
+        return LoginResponse(
+            success=True,
+            message="Login successful.",
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="Bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # In seconds
+            user_name=user.user_name,
+        )
+    
+    def _create_or_update_session(
+        self,
+        user_id: UUID,
+        device_id: str,
+        device_name: Optional[str] = None
+    ) -> UserSession:
+        """
+        Create or update user session.
+        
+        Single Device Login:
+        - Find existing active session for user
+        - Update device_id (old device gets logged out automatically)
+        - If no session exists, create new one
+        
+        Args:
+            user_id: User's UUID
+            device_id: New device identifier
+            device_name: Human readable device name (e.g., 'Chrome on Windows')
+            
+        Returns:
+            UserSession object
+        """
+        # Find existing active session for this user
+        session = self.db.query(UserSession).filter(
+            UserSession.user_id == user_id,
+            UserSession.is_session_active == True
+        ).first()
+        
+        if session:
+            # Update existing session with new device_id
+            # This invalidates the old device's refresh token!
+            # Old device will get 401 on next refresh attempt
+            session.device_id = device_id
+            session.device_name = device_name or session.device_name  # Keep old if not provided
+            session.last_activity_at = datetime.utcnow()
+            session.session_started_at = datetime.utcnow()
+            logger.info(f"Session updated for user {user_id}, old device logged out")
+        else:
+            # Create new session
+            session = UserSession(
+                user_id=user_id,
+                device_id=device_id,
+                device_name=device_name,
+                is_session_active=True,
+                session_started_at=datetime.utcnow(),
+                last_activity_at=datetime.utcnow(),
+            )
+            self.db.add(session)
+            logger.info(f"New session created for user {user_id}")
+        
+        return session
+
+    # =========================================================================
+    # RESEND OTP
+    # =========================================================================
+    
+    def resend_otp(self, data: ResendOTPRequest) -> ResendOTPResponse:
+        """
+        Resend OTP for email verification.
+        
+        Edge Cases Handled:
+        1. Rate limiting - 3 attempts per 10 minutes (Redis)
+        2. Cooldown - Minimum 60 seconds between resends
+        3. User not found - Generic response (security)
+        4. Already verified - Return success message
+        5. User blocked - Return error with retry_after
+        6. Recent OTP still valid - Return remaining time instead of new OTP
+        
+        Args:
+            data: ResendOTPRequest with email
+            
+        Returns:
+            ResendOTPResponse with success status and timing info
+        """
+        email_lower = data.email.lower()
+        
+        # -----------------------------------------------------------------
+        # Step 1: Rate Limit Check (Redis) - 3 per 10 minutes
+        # -----------------------------------------------------------------
+        rate_result = check_rate_limit(
+            action=RateLimitAction.OTP_RESEND,
+            identifier=email_lower,
+            limit=OTP_RESEND_RATE_LIMIT,
+            window_seconds=OTP_RESEND_RATE_WINDOW
+        )
+        
+        if not rate_result.allowed:
+            logger.warning(
+                f"OTP resend rate limited for {mask_email(email_lower)}, "
+                f"retry after {rate_result.retry_after}s"
+            )
+            raise AppException(
+                message=f"Too many resend requests. Please try again in {rate_result.retry_after} seconds.",
+                error_code=ErrorCode.RATE_LIMITED,
+                status_code=429,
+                details={"retry_after": rate_result.retry_after}
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Find User
+        # -----------------------------------------------------------------
+        email_hash = generate_hash(email_lower)
+        user = self._get_user_by_email_hash(email_hash)
+        
+        # Generic message for ALL cases (security - prevent enumeration)
+        generic_message = "If the email is registered, a new OTP will be sent."
+        
+        if not user:
+            # Don't reveal if user exists (security - prevent enumeration)
+            # Return SAME response as success case
+            logger.warning(f"OTP resend for non-existent email: {mask_email(email_lower)}")
+            return ResendOTPResponse(
+                success=True,
+                message=generic_message,
+                masked_email=mask_email(email_lower),
+                otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+                can_resend_in=OTP_RESEND_COOLDOWN,  # Same as real response!
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Already verified?
+        # -----------------------------------------------------------------
+        if user.is_email_verified:
+            logger.info(f"OTP resend for already verified user {user.user_id}")
+            return ResendOTPResponse(
+                success=True,
+                message="Email already verified. You can login.",
+                masked_email=mask_email(email_lower),
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 4: Check existing OTP status
+        # -----------------------------------------------------------------
+        existing_otp = self._get_active_otp(
+            user_id=user.user_id,
+            verification_type="email_verification"
+        )
+        
+        if existing_otp:
+            # Check if user is blocked
+            if existing_otp.is_user_blocked:
+                if existing_otp.blocked_at:
+                    unblock_time = existing_otp.blocked_at + timedelta(minutes=OTP_BLOCK_MINUTES)
+                    if datetime.utcnow() < unblock_time:
+                        remaining_minutes = int((unblock_time - datetime.utcnow()).total_seconds() / 60) + 1
+                        logger.warning(f"OTP resend blocked - user {user.user_id} is blocked")
+                        raise AppException(
+                            message=f"Too many failed attempts. Try again in {remaining_minutes} minutes.",
+                            error_code=ErrorCode.OTP_MAX_ATTEMPTS,
+                            status_code=403,
+                            details={"retry_after_minutes": remaining_minutes}
+                        )
+                    else:
+                        # Block period passed, unblock
+                        existing_otp.is_user_blocked = False
+                        existing_otp.blocked_at = None
+                        existing_otp.remaining_retry = OTP_MAX_ATTEMPTS
+            
+            # Check cooldown - can't resend too quickly
+            time_since_created = (datetime.utcnow() - existing_otp.otp_created_at).total_seconds()
+            if time_since_created < OTP_RESEND_COOLDOWN:
+                wait_seconds = int(OTP_RESEND_COOLDOWN - time_since_created)
+                logger.info(f"OTP resend cooldown for user {user.user_id}, wait {wait_seconds}s")
+                
+                # Return remaining time for existing OTP
+                remaining_seconds = int((existing_otp.otp_expires_at - datetime.utcnow()).total_seconds())
+                
+                return ResendOTPResponse(
+                    success=False,
+                    message=f"Please wait {wait_seconds} seconds before requesting a new OTP.",
+                    masked_email=mask_email(email_lower),
+                    otp_expires_in=max(remaining_seconds, 0),
+                    can_resend_in=wait_seconds,
+                )
+        
+        # -----------------------------------------------------------------
+        # Step 5: Generate and send new OTP
+        # -----------------------------------------------------------------
+        otp = generate_otp()
+        self._create_otp_record(
+            user_id=user.user_id,
+            otp=otp,
+            verification_type="email_verification"
+        )
+        self.db.commit()
+        
+        # Log OTP (dev mode only)
+        log_otp_generated(
+            email=email_lower,
+            otp=otp,
+            user_id=str(user.user_id)
+        )
+        
+        logger.info(f"New OTP generated via resend for user {user.user_id}")
+        
+        # TODO: Publish Kafka event to send OTP email
+        # kafka_producer.send("notification.send_otp", {
+        #     "email": email_lower,
+        #     "otp": otp,
+        #     "type": "email_verification"
+        # })
+        
+        return ResendOTPResponse(
+            success=True,
+            message=generic_message,  # Same generic message for security!
+            masked_email=mask_email(email_lower),
+            otp_expires_in=OTP_EXPIRY_MINUTES * 60,
+            can_resend_in=OTP_RESEND_COOLDOWN,
+        )

@@ -11,14 +11,42 @@ Pydantic models for:
 
 import re
 from typing import Optional
-from pydantic import BaseModel, Field, EmailStr, field_validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict
+
+
+# =============================================================================
+# BASE CLASSES - Shared configuration
+# =============================================================================
+
+class StrictRequest(BaseModel):
+    """
+    Base class for all request schemas.
+    
+    - extra='forbid': Reject requests with unknown fields
+    - This prevents accidental data leakage and ensures API strictness
+    """
+    model_config = ConfigDict(extra='forbid')
+
+
+class CleanResponse(BaseModel):
+    """
+    Base class for all response schemas.
+    
+    Responses will exclude None values when serialized.
+    This keeps API responses clean without null fields.
+    """
+    
+    def model_dump(self, **kwargs):
+        """Override to exclude None by default."""
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
 
 
 # =============================================================================
 # REGISTER
 # =============================================================================
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(StrictRequest):
     """
     Request body for user registration.
     
@@ -119,7 +147,7 @@ class RegisterRequest(BaseModel):
         return v
 
 
-class RegisterResponse(BaseModel):
+class RegisterResponse(CleanResponse):
     """Response after successful registration."""
     
     success: bool = True
@@ -138,7 +166,7 @@ class RegisterResponse(BaseModel):
 # LOGIN
 # =============================================================================
 
-class LoginRequest(BaseModel):
+class LoginRequest(StrictRequest):
     """Request body for user login."""
     
     email: EmailStr = Field(
@@ -153,30 +181,40 @@ class LoginRequest(BaseModel):
     device_name: Optional[str] = Field(
         default=None,
         max_length=100,
-        description="Device name for session tracking",
-        examples=["Chrome on Windows", "iPhone 15"]
+        description="Human readable device name (e.g., 'Chrome on Windows', 'iPhone 15')"
     )
 
 
-class LoginResponse(BaseModel):
-    """Response after successful login."""
+class LoginResponse(CleanResponse):
+    """
+    Response after login attempt.
     
-    success: bool = True
-    message: str = "Login successful"
-    access_token: str
-    refresh_token: str
-    token_type: str = "Bearer"
-    expires_in: int = Field(
-        default=420,
-        description="Access token validity in seconds (7 minutes)"
-    )
+    Two possible outcomes:
+    1. Success: returns JWT tokens
+    2. Email not verified: returns requires_otp=True with masked_email
+    """
+    
+    success: bool
+    message: str
+    
+    # Present on successful login
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    token_type: Optional[str] = None
+    expires_in: Optional[int] = None  # Access token validity in seconds
+    user_name: Optional[str] = None
+    
+    # Present when email not verified (OTP required)
+    requires_otp: Optional[bool] = None
+    masked_email: Optional[str] = None
+    otp_expires_in: Optional[int] = None  # OTP validity in seconds
 
 
 # =============================================================================
 # VERIFY OTP
 # =============================================================================
 
-class VerifyOTPRequest(BaseModel):
+class VerifyOTPRequest(StrictRequest):
     """
     Request body for OTP verification.
     
@@ -212,11 +250,12 @@ class VerifyOTPRequest(BaseModel):
         return v
 
 
-class VerifyOTPResponse(BaseModel):
+class VerifyOTPResponse(CleanResponse):
     """Response after OTP verification."""
     
     success: bool
     message: str
+    is_verified: Optional[bool] = None
     
     # Only present on successful verification
     access_token: Optional[str] = None
@@ -229,7 +268,7 @@ class VerifyOTPResponse(BaseModel):
     retry_after: Optional[int] = None  # Seconds until unblock
 
 
-class OTPStatusResponse(BaseModel):
+class OTPStatusResponse(CleanResponse):
     """Response for OTP status check (page reload scenario)."""
     
     success: bool = True
@@ -243,10 +282,32 @@ class OTPStatusResponse(BaseModel):
 
 
 # =============================================================================
+# RESEND OTP
+# =============================================================================
+
+class ResendOTPRequest(StrictRequest):
+    """Request body for resending OTP."""
+    
+    email: EmailStr = Field(
+        description="Email to resend OTP"
+    )
+
+
+class ResendOTPResponse(CleanResponse):
+    """Response after OTP resend request."""
+    
+    success: bool
+    message: str
+    otp_expires_in: Optional[int] = None  # Seconds until OTP expires
+    masked_email: Optional[str] = None
+    can_resend_in: Optional[int] = None  # Cooldown before next resend (seconds)
+
+
+# =============================================================================
 # REFRESH TOKEN
 # =============================================================================
 
-class RefreshTokenRequest(BaseModel):
+class RefreshTokenRequest(StrictRequest):
     """Request body for token refresh."""
     
     refresh_token: str = Field(
@@ -254,7 +315,7 @@ class RefreshTokenRequest(BaseModel):
     )
 
 
-class RefreshTokenResponse(BaseModel):
+class RefreshTokenResponse(CleanResponse):
     """Response after successful token refresh."""
     
     success: bool = True
@@ -267,7 +328,7 @@ class RefreshTokenResponse(BaseModel):
 # LOGOUT
 # =============================================================================
 
-class LogoutRequest(BaseModel):
+class LogoutRequest(StrictRequest):
     """Request body for logout."""
     
     device_id: Optional[str] = Field(
@@ -276,7 +337,7 @@ class LogoutRequest(BaseModel):
     )
 
 
-class LogoutResponse(BaseModel):
+class LogoutResponse(CleanResponse):
     """Response after successful logout."""
     
     success: bool = True
@@ -287,7 +348,7 @@ class LogoutResponse(BaseModel):
 # FORGOT PASSWORD
 # =============================================================================
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordRequest(StrictRequest):
     """Request body for forgot password."""
     
     email: EmailStr = Field(
@@ -295,7 +356,7 @@ class ForgotPasswordRequest(BaseModel):
     )
 
 
-class ForgotPasswordResponse(BaseModel):
+class ForgotPasswordResponse(CleanResponse):
     """Response after forgot password request."""
     
     success: bool = True
@@ -307,7 +368,7 @@ class ForgotPasswordResponse(BaseModel):
 # RESET PASSWORD
 # =============================================================================
 
-class ResetPasswordRequest(BaseModel):
+class ResetPasswordRequest(StrictRequest):
     """Request body for password reset."""
     
     email: EmailStr = Field(
@@ -365,7 +426,7 @@ class ResetPasswordRequest(BaseModel):
         return v
 
 
-class ResetPasswordResponse(BaseModel):
+class ResetPasswordResponse(CleanResponse):
     """Response after successful password reset."""
     
     success: bool = True
@@ -386,11 +447,12 @@ class ErrorDetail(BaseModel):
     message: str
 
 
-class ErrorResponse(BaseModel):
+class ErrorResponse(CleanResponse):
     """Standard error response format."""
     
     success: bool = False
     message: str
+    error_code: Optional[str] = None  # Machine-readable error code
     errors: Optional[list[ErrorDetail]] = None  # For validation errors
 
 
@@ -398,7 +460,7 @@ class ErrorResponse(BaseModel):
 # MESSAGE RESPONSE (Generic)
 # =============================================================================
 
-class MessageResponse(BaseModel):
+class MessageResponse(CleanResponse):
     """Generic success/failure response."""
     
     success: bool

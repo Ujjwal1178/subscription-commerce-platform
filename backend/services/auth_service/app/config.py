@@ -56,6 +56,9 @@ OTP_VERIFY_RATE_WINDOW = int(os.getenv("OTP_VERIFY_RATE_WINDOW", 60))  # seconds
 OTP_RESEND_RATE_LIMIT = int(os.getenv("OTP_RESEND_RATE_LIMIT", 3))
 OTP_RESEND_RATE_WINDOW = int(os.getenv("OTP_RESEND_RATE_WINDOW", 600))  # 10 minutes
 
+# OTP Resend Cooldown: Minimum 60 seconds between resends
+OTP_RESEND_COOLDOWN = int(os.getenv("OTP_RESEND_COOLDOWN", 60))  # seconds
+
 
 # =============================================================================
 # DATABASE

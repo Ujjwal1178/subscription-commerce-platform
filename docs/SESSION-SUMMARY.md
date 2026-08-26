@@ -876,6 +876,123 @@ POST /api/v1/auth/verify-otp ✅ (NEW!)
 
 ---
 
+---
+
+# PART 9: Login API + Edge Cases + Error Consistency
+## Session Date: 26 August 2026 (Tuesday)
+
+### What We Built:
+
+**Login API Complete:**
+- POST `/api/v1/auth/login` - Authenticate user, return JWT tokens
+- Single device login (new login invalidates old device)
+- Unverified email → Returns OTP (reuses if valid, checks block status)
+
+**Resend OTP API (NEW!):**
+- POST `/api/v1/auth/resend-otp` - Request new OTP with cooldown
+- 60 second cooldown between resends
+- Rate limited: 3 attempts per 10 minutes
+- User enumeration prevention (identical responses)
+
+**Error Handling Consistency:**
+- `AppException` class for service layer errors
+- `ErrorCode` enum for consistent error codes
+- Global exception handlers in FastAPI
+- `StrictRequest` base class (extra='forbid')
+- `CleanResponse` base class (exclude_none=True)
+- `response_model_exclude_none=True` on all endpoints
+
+### Edge Cases Fixed Today:
+
+| Edge Case | Before | After |
+|-----------|--------|-------|
+| Login with valid OTP exists | Created NEW OTP (wasteful) | ✅ Reuses existing OTP |
+| Login when user blocked | Ignored block status | ✅ Returns retry_after |
+| OTP resend spam | No protection | ✅ 60s cooldown + rate limit |
+| User enumeration | Different responses | ✅ Identical responses |
+| Extra fields in request | Silently ignored | ✅ Validation error |
+| Null fields in response | Sent all nulls | ✅ Excluded from JSON |
+
+### Key Concepts Learned:
+
+**User Enumeration Attack Prevention:**
+- Same message for existing and non-existing users
+- Same fields in response (including can_resend_in)
+- Attacker cannot determine if email is registered
+- Logs still capture real outcome for debugging
+
+**OTP Edge Cases (Production-Ready):**
+- Reuse valid OTP instead of generating new (saves SMS cost)
+- Check block status before sending OTP on login
+- 60 second cooldown between resends
+- Return `otp_expires_in` for frontend countdown
+- Return `can_resend_in` for resend button state
+
+**Error Consistency:**
+- Service layer raises `AppException` directly
+- Global handler converts to consistent JSON response
+- `extra='forbid'` prevents garbage data in requests
+- `exclude_none=True` removes null fields from responses
+
+### Interview Questions Added (2 new):
+- `questions/security/user-enumeration.md` - Prevention, timing attacks, rate limiting
+- `questions/authentication/otp-edge-cases.md` - OTP reuse, block check, cooldown
+
+### Files Created/Modified:
+```
+backend/shared/
+├── exceptions.py (AppException, ErrorCode enum)
+
+backend/services/auth_service/app/
+├── config.py (OTP_RESEND_COOLDOWN added)
+├── exception_handlers.py (Global handlers)
+├── main.py (register_exception_handlers)
+├── schemas/
+│   ├── auth.py (StrictRequest, CleanResponse, ResendOTP schemas)
+│   └── __init__.py (exports updated)
+├── services/
+│   └── auth_service.py (login edge cases, resend_otp method)
+└── api/
+    └── auth.py (resend-otp endpoint, response_model_exclude_none)
+
+questions/
+├── security/user-enumeration.md (NEW)
+└── authentication/otp-edge-cases.md (NEW)
+```
+
+### API Endpoints Working:
+```
+POST /api/v1/auth/register ✅
+POST /api/v1/auth/verify-otp ✅
+POST /api/v1/auth/login ✅
+POST /api/v1/auth/resend-otp ✅ (NEW!)
+```
+
+### Test Results:
+```
+1. Login with unverified email → Reuses existing OTP, shows countdown ✅
+2. Login again immediately → "OTP already sent", same OTP ✅
+3. Resend OTP within cooldown → "Wait X seconds" ✅
+4. Resend OTP for non-existent email → Same response as real user ✅
+5. Extra fields in request → Validation error ✅
+6. Response without nulls → Clean JSON ✅
+```
+
+### What's Pending:
+- [ ] Refresh token endpoint
+- [ ] Logout endpoint
+- [ ] Forgot password flow
+- [ ] Test blocked user scenario
+
+### Important Config Values:
+```python
+OTP_RESEND_COOLDOWN = 60  # seconds between resends
+OTP_RESEND_RATE_LIMIT = 3  # attempts per window
+OTP_RESEND_RATE_WINDOW = 600  # 10 minutes
+```
+
+---
+
 <!-- 
 TEMPLATE FOR NEW PARTS:
 
