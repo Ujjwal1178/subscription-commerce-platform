@@ -9,6 +9,7 @@ Pydantic models for:
 import re
 from typing import Optional, Any
 from pydantic import BaseModel, Field, field_validator
+from .auth import CleanResponse
 
 
 # =============================================================================
@@ -44,6 +45,17 @@ class UserProfile(BaseModel):
         description="Email verification status"
     )
     
+    # Subscription info (null until subscription service assigns default)
+    subscription_id: Optional[str] = Field(
+        default=None,
+        description="Current subscription ID (null for new users)"
+    )
+    
+    subscription_name: Optional[str] = Field(
+        default=None,
+        description="Current subscription name (e.g., 'Free Tier', 'Premium')"
+    )
+    
     # Optional fields (may be null)
     address: Optional[str] = None
     pincode: Optional[str] = None
@@ -54,8 +66,12 @@ class UserProfile(BaseModel):
     )
 
 
-class GetProfileResponse(BaseModel):
-    """Response for GET /profile/me"""
+class GetProfileResponse(CleanResponse):
+    """
+    Response for GET /me
+    
+    Inherits from CleanResponse to auto-exclude None fields.
+    """
     
     success: bool = True
     user: UserProfile

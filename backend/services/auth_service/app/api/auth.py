@@ -35,6 +35,8 @@ from app.schemas import (
     ResetPasswordRequest,
     ResetPasswordResponse,
     ErrorResponse,
+    GetProfileResponse,
+    UserProfile,
 )
 
 # Service (business logic)
@@ -533,3 +535,68 @@ def reset_password(
     auth_service = AuthService(db)
     result = auth_service.reset_password(data)
     return result
+
+
+# =============================================================================
+# GET PROFILE (Protected Route)
+# =============================================================================
+
+@router.get(
+    "/me",
+    response_model=GetProfileResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Profile retrieved successfully"},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        403: {"description": "Account deactivated", "model": ErrorResponse},
+        404: {"description": "User not found", "model": ErrorResponse},
+    },
+    summary="Get current user profile",
+    description="""
+    Get the authenticated user's profile information.
+    
+    **Requires:** Valid access token in Authorization header
+    
+    **Returns:**
+    - user_id, user_name
+    - email, phone_number (decrypted)
+    - is_email_verified
+    - subscription_id, subscription_name (null for now)
+    - address, pincode, preferences
+    - created_at
+    
+    **Security checks:**
+    - Token signature and expiry verified
+    - User must still be active (could be banned after login)
+    
+    **Note:** 
+    - Email verification check not needed (unverified users can't login)
+    - Subscription info will be populated when subscription service is ready
+    """,
+)
+def get_profile(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> GetProfileResponse:
+    """
+    Get current user's profile.
+    
+    Args:
+        current_user: User info from access token (injected by dependency)
+        db: Database session (injected by FastAPI)
+        
+    Returns:
+        GetProfileResponse with user profile data
+    """
+    
+    auth_service = AuthService(db)
+    
+    profile_data = auth_service.get_profile(
+        user_id=current_user["user_id"]
+    )
+    
+    return GetProfileResponse(
+        success=True,
+        user=UserProfile(**profile_data)
+    )

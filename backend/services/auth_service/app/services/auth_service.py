@@ -1438,3 +1438,83 @@ class AuthService:
             success=True,
             message="Password reset successful. Please login with your new password."
         )
+
+    # =========================================================================
+    # GET PROFILE (Protected Route)
+    # =========================================================================
+    
+    def get_profile(self, user_id: str) -> dict:
+        """
+        Get user profile by user_id.
+        
+        Called from protected endpoint - user_id comes from verified JWT.
+        
+        Flow:
+        1. Find user by user_id
+        2. Check if user is_active (could be banned after login)
+        3. Decrypt PII (email, phone)
+        4. Return profile data
+        
+        Note: No need to check is_email_verified because:
+        - Unverified user cannot login
+        - Cannot get valid JWT without login
+        - If they reach here, they're verified
+        
+        Args:
+            user_id: User's UUID (from access token)
+            
+        Returns:
+            Dict with user profile data
+        """
+        # -----------------------------------------------------------------
+        # Step 1: Find User
+        # -----------------------------------------------------------------
+        user = self.db.query(User).filter(
+            User.user_id == user_id
+        ).first()
+        
+        if not user:
+            logger.warning(f"Get profile for non-existent user: {user_id}")
+            raise AppException(
+                message="User not found.",
+                error_code=ErrorCode.USER_NOT_FOUND,
+                status_code=404
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 2: Check if user is active
+        # -----------------------------------------------------------------
+        if not user.is_active:
+            logger.warning(f"Get profile for inactive/banned user: {user_id}")
+            raise AppException(
+                message="Account has been deactivated. Please contact support.",
+                error_code=ErrorCode.USER_INACTIVE,
+                status_code=403
+            )
+        
+        # -----------------------------------------------------------------
+        # Step 3: Decrypt PII
+        # -----------------------------------------------------------------
+        decrypted_email = decrypt_data(user.email_encrypted)
+        decrypted_phone = decrypt_data(user.phone_encrypted) if user.phone_encrypted else None
+        
+        # -----------------------------------------------------------------
+        # Step 4: Build and Return Profile
+        # -----------------------------------------------------------------
+        profile = {
+            "user_id": str(user.user_id),
+            "user_name": user.user_name,
+            "email": decrypted_email,
+            "phone_number": decrypted_phone,
+            "is_email_verified": user.is_email_verified,
+            "subscription_id": None,  # TODO: Fetch from subscription service
+            "subscription_name": None,  # TODO: Fetch from subscription service
+            "address": user.address,
+            "pincode": user.pincode,
+            "preferences": user.preferences,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+        
+        logger.info(f"Profile fetched for user {user_id}")
+        
+        return profile
