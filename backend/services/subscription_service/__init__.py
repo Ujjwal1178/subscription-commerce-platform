@@ -1,1 +1,1 @@
-# Subscription Service - Subscriptions + Plans
+# Subscription Service
